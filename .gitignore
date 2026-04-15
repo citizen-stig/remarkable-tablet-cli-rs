@@ -1,3 +1,5 @@
 /target
 
 .config/remarkable-cli/config.toml
+
+.idea/
