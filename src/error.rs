@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use serde_json::json;
 
 pub type Result<T> = std::result::Result<T, CliError>;

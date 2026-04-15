@@ -1,17 +1,15 @@
-mod cli;
-mod commands;
-mod error;
-mod output;
-
-use clap::Parser;
-use cli::{Cli, Command};
 use std::process;
 
-fn main() {
+use clap::Parser;
+use remarkable_tablet_cli_rs::cli::{Cli, Command};
+use remarkable_tablet_cli_rs::{commands, output};
+
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     let result = match &cli.command {
-        Command::Connect => commands::connect::execute(&cli.global),
+        Command::Connect => commands::connect::execute(&cli.global).await,
         Command::Ls(args) => commands::ls::execute(&cli.global, args),
         Command::Info(args) => commands::info::execute(&cli.global, args),
         Command::Find(args) => commands::find::execute(&cli.global, args),
