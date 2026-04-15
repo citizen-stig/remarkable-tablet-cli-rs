@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,7 +9,6 @@ use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKey, load_secret_key};
 use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
 use tempfile::TempDir;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
@@ -72,35 +70,28 @@ pub struct SshConnection {
 impl SshConnection {
     pub async fn connect(host: &str, port: u16, opts: &ConnectOptions) -> anyhow::Result<Self> {
         let addr = format!("{host}:{port}");
-
-        let _probe = timeout(opts.timeout, TcpStream::connect(&addr))
-            .await
-            .map_err(|_| {
-                anyhow::Error::new(crate::error::CliError::ConnectionFailed(format!(
-                    "TCP connect to {addr} timed out after {:?}",
-                    opts.timeout
-                )))
-            })?
-            .map_err(|e| {
-                anyhow::Error::new(crate::error::CliError::ConnectionFailed(format!(
-                    "TCP connect to {addr} failed: {e}"
-                )))
-            })?;
-        drop(_probe);
-
         let config = Arc::new(client::Config::default());
-        let mut handle = client::connect(config, addr.as_str(), ClientHandler)
-            .await
-            .map_err(|e| {
-                anyhow::Error::new(crate::error::CliError::ConnectionFailed(format!(
-                    "SSH handshake with {addr} failed: {e}"
-                )))
-            })?;
+        let mut handle = timeout(
+            opts.timeout,
+            client::connect(config, addr.as_str(), ClientHandler),
+        )
+        .await
+        .map_err(|_| {
+            crate::error::CliError::ConnectionFailed(format!(
+                "SSH connect to {addr} timed out after {:?}",
+                opts.timeout
+            ))
+        })?
+        .map_err(|e| {
+            crate::error::CliError::ConnectionFailed(format!("SSH connect to {addr} failed: {e}"))
+        })?;
 
         if !authenticate(&mut handle, opts).await? {
-            return Err(anyhow::Error::new(crate::error::CliError::AuthFailed(
-                format!("all auth methods failed for {}@{addr}", opts.user),
-            )));
+            return Err(crate::error::CliError::AuthFailed(format!(
+                "all auth methods failed for {}@{addr}",
+                opts.user
+            ))
+            .into());
         }
 
         let channel = handle
@@ -121,13 +112,12 @@ impl SshConnection {
         })
     }
 
-    pub async fn disconnect(&self) -> anyhow::Result<()> {
+    pub async fn disconnect(&self) {
         let handle = self.handle.lock().await;
         handle
             .disconnect(Disconnect::ByApplication, "bye", "en")
             .await
             .ok();
-        Ok(())
     }
 }
 
@@ -229,9 +219,9 @@ impl TabletConnection for SshConnection {
     async fn read_file<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<Vec<u8>> {
         let s = path_to_string(&path)?;
         let sftp = self.sftp.lock().await;
-        sftp.read(s.clone())
+        sftp.read(s)
             .await
-            .with_context(|| format!("sftp read {s}"))
+            .with_context(|| format!("sftp read {}", path.as_ref().display()))
     }
 
     async fn write_file<P: AsRef<Path> + Send>(
@@ -241,18 +231,18 @@ impl TabletConnection for SshConnection {
     ) -> anyhow::Result<()> {
         let s = path_to_string(&path)?;
         let sftp = self.sftp.lock().await;
-        sftp.write(s.clone(), data)
+        sftp.write(s, data)
             .await
-            .with_context(|| format!("sftp write {s}"))
+            .with_context(|| format!("sftp write {}", path.as_ref().display()))
     }
 
     async fn list_dir<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<Vec<String>> {
         let s = path_to_string(&path)?;
         let sftp = self.sftp.lock().await;
         let dir = sftp
-            .read_dir(s.clone())
+            .read_dir(s)
             .await
-            .with_context(|| format!("sftp read_dir {s}"))?;
+            .with_context(|| format!("sftp read_dir {}", path.as_ref().display()))?;
         let mut out = Vec::new();
         for entry in dir {
             let name = entry.file_name();
@@ -266,9 +256,9 @@ impl TabletConnection for SshConnection {
     async fn remove_file<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<()> {
         let s = path_to_string(&path)?;
         let sftp = self.sftp.lock().await;
-        sftp.remove_file(s.clone())
+        sftp.remove_file(s)
             .await
-            .with_context(|| format!("sftp remove_file {s}"))
+            .with_context(|| format!("sftp remove_file {}", path.as_ref().display()))
     }
 
     async fn execute(&self, command: &str) -> anyhow::Result<String> {
@@ -296,9 +286,9 @@ impl TabletConnection for SshConnection {
     async fn file_exists<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<bool> {
         let s = path_to_string(&path)?;
         let sftp = self.sftp.lock().await;
-        sftp.try_exists(s.clone())
+        sftp.try_exists(s)
             .await
-            .map_err(|e| anyhow::Error::new(e).context(format!("sftp stat {s}")))
+            .map_err(|e| anyhow::Error::new(e).context(format!("sftp stat {}", path.as_ref().display())))
     }
 }
 
@@ -306,14 +296,14 @@ impl TabletConnection for SshConnection {
 
 pub struct FakeConnection {
     root: TempDir,
-    commands: std::sync::Mutex<HashMap<String, String>>,
+    commands: std::sync::Mutex<Vec<(String, String)>>,
 }
 
 impl FakeConnection {
     pub fn new() -> Self {
         Self {
             root: tempfile::tempdir().expect("tempdir"),
-            commands: std::sync::Mutex::new(HashMap::new()),
+            commands: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -336,10 +326,12 @@ impl FakeConnection {
     }
 
     pub fn set_command_output(&self, cmd_substring: &str, output: &str) {
-        self.commands
-            .lock()
-            .unwrap()
-            .insert(cmd_substring.to_string(), output.to_string());
+        let mut cmds = self.commands.lock().unwrap();
+        if let Some(entry) = cmds.iter_mut().find(|(s, _)| s == cmd_substring) {
+            entry.1 = output.to_string();
+        } else {
+            cmds.push((cmd_substring.to_string(), output.to_string()));
+        }
     }
 }
 
@@ -386,8 +378,8 @@ impl TabletConnection for FakeConnection {
     }
 
     async fn execute(&self, command: &str) -> anyhow::Result<String> {
-        let map = self.commands.lock().unwrap();
-        for (substr, output) in map.iter() {
+        let cmds = self.commands.lock().unwrap();
+        for (substr, output) in cmds.iter() {
             if command.contains(substr) {
                 return Ok(output.clone());
             }

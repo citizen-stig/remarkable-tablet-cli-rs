@@ -44,7 +44,7 @@ async fn run(global: &GlobalOptions) -> anyhow::Result<()> {
         .await
         .context("fetch device info")?;
 
-    ssh.disconnect().await.ok();
+    ssh.disconnect().await;
 
     output::print_device_info(&info, resolved.format);
     Ok(())

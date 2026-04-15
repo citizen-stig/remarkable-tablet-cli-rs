@@ -191,17 +191,20 @@ Error codes: `connection_failed`, `auth_failed`, `not_found`, `already_exists`, 
 
 ## 6. Architecture
 
+The crate has both a library and a binary target. `src/lib.rs` re-exports every module so `tests/` (integration) can reach `FakeConnection`, `fetch_device_info`, etc. directly. `src/main.rs` is a thin wrapper that calls into the library.
+
 ```
 src/
-  main.rs                 Entry point, clap dispatch
+  lib.rs                  Module declarations (pub) for the library target
+  main.rs                 Entry point; `#[tokio::main] async fn main`, clap dispatch
   cli.rs                  Clap derive structs (all commands + global opts)
   config.rs               Config file + env var + CLI flag merging
-  connection.rs           TabletConnection trait + SSH/SFTP implementation
-  tablet.rs               High-level tablet ops (read metadata, stop/restart xochitl)
+  connection.rs           TabletConnection trait + SshConnection + FakeConnection
+  tablet.rs               High-level tablet ops (device info, metadata reads, xochitl stop/restart)
   metadata.rs             Serde structs for .metadata and .content JSON
   tree.rs                 In-memory document tree from flat metadata
   path_resolver.rs        Human path <-> UUID resolution
-  output.rs               JSON / human-readable formatting
+  output.rs               JSON / human-readable formatting; verbose-log helper
   error.rs                Error types and codes
   commands/
     mod.rs, connect.rs, ls.rs, info.rs, find.rs,
@@ -212,44 +215,66 @@ src/
     types.rs              Stroke, Point, Layer, Page types
     render.rs             Rasterize strokes to PNG via image crate
 tests/
+  connect.rs              Integration test for `connect` via FakeConnection
   fixtures/               Sample .metadata and .content JSON files
 ```
 
 ### Testability: `TabletConnection` trait
 
-The core abstraction for testability. Defined in `connection.rs`:
+The core abstraction for testability. Defined in `connection.rs` using native async-in-traits (edition 2024) with explicit `impl Future<Output = …> + Send` returns so Send bounds are part of the trait contract:
 
 ```rust
-#[async_trait]
-pub trait TabletConnection {
-    async fn read_file(&self, path: &str) -> Result<Vec<u8>>;
-    async fn write_file(&self, path: &str, data: &[u8]) -> Result<()>;
-    async fn list_dir(&self, path: &str) -> Result<Vec<String>>;
-    async fn remove_file(&self, path: &str) -> Result<()>;
-    async fn execute(&self, command: &str) -> Result<String>;
-    async fn file_exists(&self, path: &str) -> Result<bool>;
+use std::future::Future;
+use std::path::Path;
+
+pub trait TabletConnection: Send + Sync {
+    fn read_file<P: AsRef<Path> + Send>(
+        &self, path: P,
+    ) -> impl Future<Output = anyhow::Result<Vec<u8>>> + Send;
+    fn write_file<P: AsRef<Path> + Send>(
+        &self, path: P, data: &[u8],
+    ) -> impl Future<Output = anyhow::Result<()>> + Send;
+    fn list_dir<P: AsRef<Path> + Send>(
+        &self, path: P,
+    ) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send;
+    fn remove_file<P: AsRef<Path> + Send>(
+        &self, path: P,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send;
+    fn execute(
+        &self, command: &str,
+    ) -> impl Future<Output = anyhow::Result<String>> + Send;
+    fn file_exists<P: AsRef<Path> + Send>(
+        &self, path: P,
+    ) -> impl Future<Output = anyhow::Result<bool>> + Send;
 }
 ```
 
-- **Production**: `SshConnection` implements the trait via `russh`/`russh-sftp`.
-- **Tests**: `FakeConnection` operates on a local temp directory, enabling offline unit and integration tests for all commands.
+Generic path args (`impl AsRef<Path> + Send`) let callers pass `&str`, `String`, `&Path`, or `PathBuf` interchangeably. Consumers take `&C` with `C: TabletConnection` (generic monomorphization) rather than `&dyn TabletConnection` — the trait is not object-safe because of the generic methods, which is an acceptable trade-off since we don't need heterogeneous connection collections.
+
+- **Production**: `SshConnection` implements the trait via `russh`/`russh-sftp` (TCP probe → SSH handshake → SFTP subsystem). Auth tries SSH agent → key-file → password in order. Host-key verification accepts any server key — USB-connected tablets reflash their host key regularly; strict checking is impractical.
+- **Tests**: `FakeConnection` (also in `connection.rs`, exported publicly) operates on a `tempfile::TempDir`, enabling offline unit and integration tests. `set_file`, `mkdir`, and `set_command_output` let a test populate remote state; `execute` looks up registered substrings in the command.
 
 ### Key dependencies
-| Crate                  | Purpose                                  |
-|------------------------|------------------------------------------|
-| `clap` (derive)        | CLI parsing                              |
-| `russh` + `russh-sftp` | SSH/SFTP (pure Rust, no native C deps)   |
-| `tokio`                | Async runtime (required by russh)        |
-| `serde` + `serde_json` | JSON ser/de                              |
-| `uuid`                 | UUID v4 generation                       |
-| `image`                | PNG creation for .rm rendering (Phase 4) |
-| `toml`                 | Config file parsing                      |
-| `anyhow`               | Application error propagation            |
-| `thiserror`            | Structured error types (JSON error codes)|
+| Crate                                       | Purpose                                                                 |
+|---------------------------------------------|-------------------------------------------------------------------------|
+| `clap` (derive + env)                       | CLI parsing, env-var sourcing for `REMARKABLE_PASSWORD`                 |
+| `russh` (pinned `=0.57.1`) + `russh-sftp`   | SSH/SFTP (pure Rust, no native C deps)                                  |
+| `tokio` (rt-multi-thread, macros, net, time, io-util, fs, sync) | Async runtime (required by russh)                    |
+| `serde` + `serde_json`                      | JSON ser/de                                                             |
+| `uuid`                                      | UUID v4 generation                                                      |
+| `image`                                     | PNG creation for .rm rendering (Phase 4)                                |
+| `toml`                                      | Config file parsing                                                     |
+| `anyhow`                                    | Application error propagation                                           |
+| `thiserror`                                 | Structured error types (JSON error codes)                               |
+| `tempfile`                                  | Backing store for `FakeConnection` (declared as a regular dep, not dev) |
 
 Why `russh` over `ssh2`: `ssh2` wraps libssh2 (C), which requires OpenSSL/libssh2 system libraries and causes build issues across platforms and CI. `russh` is pure Rust — compiles everywhere with zero native deps. The async requirement is minimal (`#[tokio::main]` on main).
 
-Why `anyhow` + `thiserror`: `anyhow` reduces error-handling boilerplate for CLI internals. `thiserror` defines the structured error enum used only at the output boundary for JSON error codes.
+Why `russh` is pinned to `=0.57.1`: as of April 2026 the latest `russh` (0.60.0) pulls in `internal-russh-forked-ssh-key` → `p256 0.14.0-rc.8`, which fails to compile against the rc.30+ series of `elliptic-curve` / `primeorder`. Pin back to 0.57.1 until the rc series stabilizes.
+
+Why `anyhow` + `thiserror`: internal fallible code returns `anyhow::Result<T>`. Errors that need specific JSON codes are attached via `anyhow::Error::new(CliError::…)`; the top-level `execute` in each command downcasts at the output boundary. Generic errors fall through to `CliError::IoError`. This keeps propagation ergonomic while preserving the structured error contract for agent consumers.
+
+No `async-trait`: edition 2024 supports native async-in-traits with explicit `impl Future<…> + Send` returns. The crate is object-safety-free (see `TabletConnection` discussion above), which suits our use pattern and avoids the macro.
 
 Custom .rm parser over external crate: format is small and well-specified, avoids dependency on potentially unmaintained crates.
 
@@ -258,8 +283,8 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 ## 7. Task Breakdown
 
 ### Phase 1: Foundation
-1. **Project scaffolding + CLI skeleton** — Cargo.toml deps, clap derive structs for all commands, main.rs dispatch, output.rs, error.rs. Deliverable: `remarkable-cli --help` works for all subcommands.
-2. **`TabletConnection` trait + SSH implementation + config** — connection.rs (trait + `SshConnection`), config.rs, `FakeConnection` for tests. Deliverable: `remarkable-cli connect` works.
+1. + **Project scaffolding + CLI skeleton** — Cargo.toml deps, clap derive structs for all commands, main.rs dispatch, output.rs, error.rs. Deliverable: `remarkable-cli --help` works for all subcommands.
+2. ~ **`TabletConnection` trait + SSH implementation + config** — connection.rs (trait + `SshConnection`), config.rs, `FakeConnection` for tests. Deliverable: `remarkable-cli connect` works.
 3. **Metadata parsing + document tree** — metadata.rs serde structs, tablet.rs (read all metadata via trait), tree.rs, path_resolver.rs + unit tests using fixtures. Deliverable: internal library represents full document tree.
 4. **Browse commands** — `ls` (with `--tree`/`--recursive`), `info`, `find`. Deliverable: full read-only browsing with tests.
 

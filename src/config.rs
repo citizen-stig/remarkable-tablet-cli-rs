@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde::Deserialize;
 
 use crate::cli::GlobalOptions;
@@ -49,7 +49,7 @@ pub fn default_config_path() -> Option<PathBuf> {
     })
 }
 
-pub fn load_file_config(path: Option<&Path>) -> Result<FileConfig> {
+pub fn load_file_config(path: Option<&Path>) -> anyhow::Result<FileConfig> {
     let target = match path {
         Some(p) => Some(p.to_path_buf()),
         None => default_config_path(),
@@ -98,10 +98,10 @@ pub fn resolve(cli: &GlobalOptions, file: &FileConfig) -> ResolvedConfig {
         )
     };
 
-    let format = if matches!(cli.format, OutputFormat::Human) {
-        file.format.unwrap_or(OutputFormat::Human)
-    } else {
+    let format = if cli.format != OutputFormat::Human {
         cli.format
+    } else {
+        file.format.unwrap_or(OutputFormat::Human)
     };
 
     let data_dir = if cli.data_dir != DEFAULT_DATA_DIR {
