@@ -1,0 +1,104 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, bail};
+use tempfile::TempDir;
+
+use super::TabletConnection;
+
+pub struct FakeConnection {
+    root: TempDir,
+    commands: std::sync::Mutex<Vec<(String, String)>>,
+}
+
+impl FakeConnection {
+    pub fn new() -> Self {
+        Self {
+            root: tempfile::tempdir().expect("tempdir"),
+            commands: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn local<P: AsRef<Path>>(&self, remote: P) -> PathBuf {
+        let s = remote.as_ref().to_string_lossy();
+        let rel = s.trim_start_matches('/');
+        self.root.path().join(rel)
+    }
+
+    pub fn set_file<P: AsRef<Path>>(&self, path: P, data: impl AsRef<[u8]>) {
+        let p = self.local(path);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&p, data.as_ref()).unwrap();
+    }
+
+    pub fn mkdir<P: AsRef<Path>>(&self, path: P) {
+        std::fs::create_dir_all(self.local(path)).unwrap();
+    }
+
+    pub fn set_command_output(&self, cmd_substring: &str, output: &str) {
+        let mut cmds = self.commands.lock().unwrap();
+        if let Some(entry) = cmds.iter_mut().find(|(s, _)| s == cmd_substring) {
+            entry.1 = output.to_string();
+        } else {
+            cmds.push((cmd_substring.to_string(), output.to_string()));
+        }
+    }
+}
+
+impl Default for FakeConnection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TabletConnection for FakeConnection {
+    async fn read_file<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<Vec<u8>> {
+        let p = self.local(&path);
+        std::fs::read(&p).with_context(|| format!("fake read_file {}", p.display()))
+    }
+
+    async fn write_file<P: AsRef<Path> + Send>(
+        &self,
+        path: P,
+        data: &[u8],
+    ) -> anyhow::Result<()> {
+        let p = self.local(&path);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&p, data).with_context(|| format!("fake write_file {}", p.display()))
+    }
+
+    async fn list_dir<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<Vec<String>> {
+        let p = self.local(&path);
+        let entries =
+            std::fs::read_dir(&p).with_context(|| format!("fake list_dir {}", p.display()))?;
+        let mut out = Vec::new();
+        for e in entries {
+            let e = e?;
+            out.push(e.file_name().to_string_lossy().into_owned());
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    async fn remove_file<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<()> {
+        let p = self.local(&path);
+        std::fs::remove_file(&p).with_context(|| format!("fake remove_file {}", p.display()))
+    }
+
+    async fn execute(&self, command: &str) -> anyhow::Result<String> {
+        let cmds = self.commands.lock().unwrap();
+        for (substr, output) in cmds.iter() {
+            if command.contains(substr) {
+                return Ok(output.clone());
+            }
+        }
+        bail!("fake execute: no registered output for command `{command}`")
+    }
+
+    async fn file_exists<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<bool> {
+        Ok(self.local(&path).exists())
+    }
+}
