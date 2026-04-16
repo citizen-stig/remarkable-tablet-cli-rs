@@ -2,6 +2,7 @@ use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
 
 use crate::connection::TabletConnection;
+use crate::metadata::{self, DocumentEntry, ItemType};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceInfo {
@@ -112,6 +113,65 @@ async fn fetch_disk<C: TabletConnection>(
     Ok((total_k / 1024, used_k / 1024, free_k / 1024))
 }
 
+/// Load all document/folder metadata from the tablet's xochitl data directory.
+///
+/// Entries that fail to parse are silently skipped so one corrupt file
+/// doesn't prevent listing the rest.
+pub async fn load_all_metadata<C: TabletConnection>(
+    conn: &C,
+    data_dir: &str,
+) -> anyhow::Result<Vec<DocumentEntry>> {
+    let dir_entries = conn
+        .list_dir(data_dir)
+        .await
+        .with_context(|| format!("list {data_dir}"))?;
+
+    let uuids: Vec<_> = dir_entries
+        .iter()
+        .filter_map(|name| metadata::extract_uuid(name))
+        .collect();
+
+    let mut result = Vec::with_capacity(uuids.len());
+
+    for uuid in uuids {
+        let meta_path = format!("{data_dir}/{uuid}.metadata");
+        let meta_bytes = match conn.read_file(&meta_path).await {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let raw = match metadata::parse_metadata(&meta_bytes) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        let file_type = if raw.item_type == ItemType::Document {
+            let content_path = format!("{data_dir}/{uuid}.content");
+            match conn.read_file(&content_path).await {
+                Ok(b) => metadata::parse_content(&b).ok().map(|c| c.file_type),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        result.push(DocumentEntry {
+            uuid,
+            visible_name: raw.visible_name,
+            item_type: raw.item_type,
+            parent: raw.parent,
+            deleted: raw.deleted,
+            pinned: raw.pinned,
+            last_modified: raw.last_modified,
+            version: raw.version,
+            tags: raw.tags,
+            last_opened: raw.last_opened,
+            file_type,
+        });
+    }
+
+    Ok(result)
+}
+
 fn shell_single_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
@@ -130,6 +190,10 @@ fn shell_single_quote(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::connection::FakeConnection;
+    use crate::metadata::{FileType, Parent};
+    use uuid::Uuid;
+
+    const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
 
     #[tokio::test]
     async fn parses_firmware_and_battery_and_disk() {
@@ -178,5 +242,121 @@ mod tests {
     fn shell_quote_basic() {
         assert_eq!(shell_single_quote("abc"), "'abc'");
         assert_eq!(shell_single_quote("a'b"), "'a'\\''b'");
+    }
+
+    // -- load_all_metadata tests --
+
+    fn set_metadata(conn: &FakeConnection, uuid: &str, json: &str) {
+        conn.set_file(&format!("{DATA_DIR}/{uuid}.metadata"), json);
+    }
+
+    fn set_content(conn: &FakeConnection, uuid: &str, json: &str) {
+        conn.set_file(&format!("{DATA_DIR}/{uuid}.content"), json);
+    }
+
+    #[tokio::test]
+    async fn load_metadata_normal() {
+        let conn = FakeConnection::new();
+        conn.mkdir(DATA_DIR);
+
+        let folder_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let doc_uuid = "11111111-2222-3333-4444-555555555555";
+
+        set_metadata(
+            &conn,
+            folder_uuid,
+            r#"{"visibleName":"Work","type":"CollectionType","parent":"","deleted":false,"pinned":false,"lastModified":1710518400000,"metadatamodified":1710518400000,"version":1}"#,
+        );
+        set_metadata(
+            &conn,
+            doc_uuid,
+            r#"{"visibleName":"Notes","type":"DocumentType","parent":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","deleted":false,"pinned":false,"lastModified":1710604800000,"metadatamodified":1710604800000,"version":1,"tags":["work"]}"#,
+        );
+        set_content(&conn, doc_uuid, r#"{"fileType":"notebook"}"#);
+
+        let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let folder = entries.iter().find(|e| e.visible_name == "Work").unwrap();
+        assert_eq!(folder.item_type, ItemType::Collection);
+        assert_eq!(folder.parent, Parent::Root);
+        assert!(folder.file_type.is_none());
+
+        let doc = entries.iter().find(|e| e.visible_name == "Notes").unwrap();
+        assert_eq!(doc.item_type, ItemType::Document);
+        assert_eq!(
+            doc.parent,
+            Parent::Folder(Uuid::parse_str(folder_uuid).unwrap())
+        );
+        assert_eq!(doc.file_type, Some(FileType::Notebook));
+        assert_eq!(doc.tags, vec!["work"]);
+    }
+
+    #[tokio::test]
+    async fn load_metadata_skips_corrupt() {
+        let conn = FakeConnection::new();
+        conn.mkdir(DATA_DIR);
+
+        let good_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let bad_uuid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+
+        set_metadata(
+            &conn,
+            good_uuid,
+            r#"{"visibleName":"OK","type":"CollectionType","parent":"","deleted":false,"pinned":false,"lastModified":1710000000000,"metadatamodified":1710000000000,"version":1}"#,
+        );
+        set_metadata(&conn, bad_uuid, "not json at all {{{");
+
+        let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].visible_name, "OK");
+    }
+
+    #[tokio::test]
+    async fn load_metadata_missing_content() {
+        let conn = FakeConnection::new();
+        conn.mkdir(DATA_DIR);
+
+        let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        set_metadata(
+            &conn,
+            uuid,
+            r#"{"visibleName":"Doc","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710000000000,"metadatamodified":1710000000000,"version":1}"#,
+        );
+        // No .content file
+
+        let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].file_type.is_none());
+    }
+
+    #[tokio::test]
+    async fn load_metadata_empty_dir() {
+        let conn = FakeConnection::new();
+        conn.mkdir(DATA_DIR);
+
+        let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_metadata_ignores_non_metadata_files() {
+        let conn = FakeConnection::new();
+        conn.mkdir(DATA_DIR);
+
+        let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        set_metadata(
+            &conn,
+            uuid,
+            r#"{"visibleName":"Doc","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710000000000,"metadatamodified":1710000000000,"version":1}"#,
+        );
+        // Other files that should be ignored
+        conn.set_file(&format!("{DATA_DIR}/{uuid}.content"), r#"{"fileType":"pdf"}"#);
+        conn.set_file(&format!("{DATA_DIR}/{uuid}.pdf"), b"fake pdf");
+        conn.set_file(&format!("{DATA_DIR}/random.txt"), "hello");
+
+        let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file_type, Some(FileType::Pdf));
     }
 }

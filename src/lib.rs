@@ -3,5 +3,8 @@ pub mod commands;
 pub mod config;
 pub mod connection;
 pub mod error;
+pub mod metadata;
 pub mod output;
+pub mod path_resolver;
 pub mod tablet;
+pub mod tree;
