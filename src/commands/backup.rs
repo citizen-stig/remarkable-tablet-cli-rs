@@ -1,4 +1,4 @@
-use crate::cli::{GlobalOptions, BackupArgs};
+use crate::cli::{BackupArgs, GlobalOptions};
 use crate::error::Result;
 use crate::output;
 

@@ -6,10 +6,7 @@ async fn reports_device_info_over_fake_connection() {
     let conn = FakeConnection::new();
     conn.set_file("/etc/version", "20230412102300\n");
     conn.mkdir("/sys/class/power_supply/max77818_battery");
-    conn.set_file(
-        "/sys/class/power_supply/max77818_battery/capacity",
-        "82\n",
-    );
+    conn.set_file("/sys/class/power_supply/max77818_battery/capacity", "82\n");
     conn.set_command_output(
         "df -k",
         "Filesystem     1K-blocks    Used Available Use% Mounted on\n\

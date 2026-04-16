@@ -1,6 +1,4 @@
-use remarkable_tablet_cli_rs::metadata::{
-    self, FileType, ItemType, Parent,
-};
+use remarkable_tablet_cli_rs::metadata::{self, FileType, ItemType, Parent};
 use uuid::Uuid;
 
 #[test]

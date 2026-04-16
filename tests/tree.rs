@@ -86,15 +86,12 @@ async fn full_pipeline_load_build_resolve() {
     assert_eq!(root.len(), 2);
 
     // Work folder has: Projects folder + Meeting Notes doc
-    let work_children = tree.child_entries(&Parent::Folder(
-        Uuid::parse_str(FOLDER_WORK).unwrap(),
-    ));
+    let work_children = tree.child_entries(&Parent::Folder(Uuid::parse_str(FOLDER_WORK).unwrap()));
     assert_eq!(work_children.len(), 2);
 
     // Projects folder has: Research Paper
-    let project_children = tree.child_entries(&Parent::Folder(
-        Uuid::parse_str(FOLDER_PROJECTS).unwrap(),
-    ));
+    let project_children =
+        tree.child_entries(&Parent::Folder(Uuid::parse_str(FOLDER_PROJECTS).unwrap()));
     assert_eq!(project_children.len(), 1);
     assert_eq!(project_children[0].visible_name, "Research Paper");
     assert_eq!(project_children[0].file_type, Some(FileType::Pdf));
@@ -112,7 +109,10 @@ async fn path_resolution_end_to_end() {
     let tree = DocumentTree::build(entries);
 
     // Resolve root
-    assert!(matches!(path_resolver::resolve(&tree, "/"), Ok(Resolved::Root)));
+    assert!(matches!(
+        path_resolver::resolve(&tree, "/"),
+        Ok(Resolved::Root)
+    ));
 
     // Resolve by path
     match path_resolver::resolve(&tree, "/Work") {

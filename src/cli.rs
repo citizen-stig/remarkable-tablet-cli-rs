@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, Args, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::output::OutputFormat;
 
@@ -45,7 +45,11 @@ pub struct GlobalOptions {
     pub timeout: u64,
 
     /// Remote xochitl data directory path
-    #[arg(long, global = true, default_value = "/home/root/.local/share/remarkable/xochitl")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "/home/root/.local/share/remarkable/xochitl"
+    )]
     pub data_dir: String,
 
     /// Skip xochitl restart after mutating operations

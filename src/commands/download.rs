@@ -1,4 +1,4 @@
-use crate::cli::{GlobalOptions, DownloadArgs};
+use crate::cli::{DownloadArgs, GlobalOptions};
 use crate::error::Result;
 use crate::output;
 

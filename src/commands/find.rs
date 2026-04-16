@@ -1,4 +1,4 @@
-use crate::cli::{GlobalOptions, FindArgs};
+use crate::cli::{FindArgs, GlobalOptions};
 use crate::error::Result;
 use crate::output;
 

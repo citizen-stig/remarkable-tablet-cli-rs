@@ -81,7 +81,9 @@ pub fn resolve(cli: &GlobalOptions, file: &FileConfig) -> ResolvedConfig {
     let user = if cli.user != DEFAULT_USER {
         cli.user.clone()
     } else {
-        file.user.clone().unwrap_or_else(|| DEFAULT_USER.to_string())
+        file.user
+            .clone()
+            .unwrap_or_else(|| DEFAULT_USER.to_string())
     };
 
     // clap handles env for password via REMARKABLE_PASSWORD, so cli.password

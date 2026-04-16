@@ -20,12 +20,11 @@ pub async fn fetch_device_info<C: TabletConnection>(
     host: &str,
     data_dir: &str,
 ) -> anyhow::Result<DeviceInfo> {
-    let (firmware_version, battery_percent, (disk_total_mb, disk_used_mb, disk_free_mb)) =
-        tokio::try_join!(
-            fetch_firmware(conn),
-            fetch_battery(conn),
-            fetch_disk(conn, data_dir),
-        )?;
+    let (firmware_version, battery_percent, (disk_total_mb, disk_used_mb, disk_free_mb)) = tokio::try_join!(
+        fetch_firmware(conn),
+        fetch_battery(conn),
+        fetch_disk(conn, data_dir),
+    )?;
     Ok(DeviceInfo {
         host: host.to_string(),
         connection_type: connection_type_for(host).to_string(),
@@ -84,7 +83,10 @@ async fn fetch_disk<C: TabletConnection>(
     // quotes with any embedded quotes closed-escaped-reopened.
     let escaped = shell_single_quote(data_dir);
     let cmd = format!("df -k {escaped}");
-    let out = conn.execute(&cmd).await.with_context(|| format!("run `{cmd}`"))?;
+    let out = conn
+        .execute(&cmd)
+        .await
+        .with_context(|| format!("run `{cmd}`"))?;
     let mut lines = out.lines();
     let _header = lines.next();
     // df may wrap long filesystem names onto a second line; concatenate
@@ -200,10 +202,7 @@ mod tests {
         let conn = FakeConnection::new();
         conn.set_file("/etc/version", "20230412102300\n");
         conn.mkdir("/sys/class/power_supply/max77818_battery");
-        conn.set_file(
-            "/sys/class/power_supply/max77818_battery/capacity",
-            "78\n",
-        );
+        conn.set_file("/sys/class/power_supply/max77818_battery/capacity", "78\n");
         conn.set_command_output(
             "df -k",
             "Filesystem     1K-blocks    Used Available Use% Mounted on\n/dev/root        6291456 2097152   4194304  33% /\n",
@@ -234,7 +233,9 @@ mod tests {
             "df -k",
             "Filesystem 1K-blocks Used Available Use% Mounted on\n/dev/root 1024 256 768 25% /\n",
         );
-        let info = fetch_device_info(&conn, "192.168.1.50", "/anywhere").await.unwrap();
+        let info = fetch_device_info(&conn, "192.168.1.50", "/anywhere")
+            .await
+            .unwrap();
         assert_eq!(info.connection_type, "wifi");
     }
 
@@ -351,7 +352,10 @@ mod tests {
             r#"{"visibleName":"Doc","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710000000000,"metadatamodified":1710000000000,"version":1}"#,
         );
         // Other files that should be ignored
-        conn.set_file(&format!("{DATA_DIR}/{uuid}.content"), r#"{"fileType":"pdf"}"#);
+        conn.set_file(
+            &format!("{DATA_DIR}/{uuid}.content"),
+            r#"{"fileType":"pdf"}"#,
+        );
         conn.set_file(&format!("{DATA_DIR}/{uuid}.pdf"), b"fake pdf");
         conn.set_file(&format!("{DATA_DIR}/random.txt"), "hello");
 

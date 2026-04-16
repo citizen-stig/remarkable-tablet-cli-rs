@@ -15,15 +15,13 @@ pub enum Resolved<'a> {
 /// Resolve a human-readable path like `"/Work/Meeting Notes"` to a tree entry.
 ///
 /// - `"/"` resolves to `Resolved::Root`.
+/// - `"/trash/<name>"` resolves within the virtual trash container.
 /// - Each path segment is matched against `visible_name` at the current level.
 /// - Returns `CliError::NotFound` if a segment has no match.
 /// - Returns an error if duplicate `visible_name` values exist at the same level.
 pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Resolved<'a>> {
     if !path.starts_with('/') {
-        return Err(CliError::InvalidPath(format!(
-            "path must start with '/': {path}"
-        ))
-        .into());
+        return Err(CliError::InvalidPath(format!("path must start with '/': {path}")).into());
     }
 
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -31,9 +29,20 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
         return Ok(Resolved::Root);
     }
 
-    let mut current_parent = Parent::Root;
+    let (mut current_parent, start_index) = if segments[0] == "trash" {
+        if segments.len() == 1 {
+            return Err(CliError::InvalidPath(
+                "'/trash' is a virtual container; specify an item path under it".to_string(),
+            )
+            .into());
+        }
+        (Parent::Trash, 1)
+    } else {
+        (Parent::Root, 0)
+    };
 
-    for (i, segment) in segments.iter().enumerate() {
+    for (offset, segment) in segments[start_index..].iter().enumerate() {
+        let i = start_index + offset;
         let children = tree.child_entries(&current_parent);
         let matches: Vec<_> = children
             .iter()
@@ -55,10 +64,9 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
                 }
                 // Intermediate segments must be folders
                 if !entry.is_folder() {
-                    return Err(CliError::InvalidPath(format!(
-                        "'{segment}' is not a folder"
-                    ))
-                    .into());
+                    return Err(
+                        CliError::InvalidPath(format!("'{segment}' is not a folder")).into(),
+                    );
                 }
                 current_parent = Parent::Folder(entry.uuid);
             }
@@ -96,14 +104,16 @@ pub fn resolve_uuid_to_path(tree: &DocumentTree, uuid: &Uuid) -> anyhow::Result<
                 return Ok(format!("/trash/{}", parts.join("/")));
             }
             Parent::Folder(parent_uuid) => {
-                current = tree.get(parent_uuid).ok_or_else(|| {
-                    anyhow!("broken parent chain: UUID {parent_uuid} not found")
-                })?;
+                current = tree
+                    .get(parent_uuid)
+                    .ok_or_else(|| anyhow!("broken parent chain: UUID {parent_uuid} not found"))?;
             }
         }
     }
 
-    Err(anyhow!("parent chain too deep (>100 levels), possible cycle"))
+    Err(anyhow!(
+        "parent chain too deep (>100 levels), possible cycle"
+    ))
 }
 
 /// Accept either a UUID or a human path and resolve it.
@@ -366,6 +376,26 @@ mod tests {
             resolve_uuid_to_path(&tree, &uuid).unwrap(),
             "/trash/Old Draft"
         );
+    }
+
+    #[test]
+    fn trashed_uuid_to_path_round_trips_through_path_resolver() {
+        let tree = sample_tree();
+        let uuid = Uuid::parse_str(DOC_TRASH).unwrap();
+        let path = resolve_uuid_to_path(&tree, &uuid).unwrap();
+
+        match resolve_path(&tree, &path) {
+            Ok(Resolved::Entry(entry)) => assert_eq!(entry.uuid, uuid),
+            other => panic!("expected Entry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_trash_container_path_is_invalid() {
+        let tree = sample_tree();
+        let err = resolve_path(&tree, "/trash").unwrap_err();
+        let cli_err = err.downcast_ref::<CliError>().unwrap();
+        assert!(matches!(cli_err, CliError::InvalidPath(_)));
     }
 
     #[test]

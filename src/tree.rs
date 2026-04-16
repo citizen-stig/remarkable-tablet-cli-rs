@@ -48,21 +48,13 @@ impl DocumentTree {
     pub fn child_entries(&self, parent: &Parent) -> Vec<&DocumentEntry> {
         self.children
             .get(parent)
-            .map(|uuids| {
-                uuids
-                    .iter()
-                    .filter_map(|u| self.entries.get(u))
-                    .collect()
-            })
+            .map(|uuids| uuids.iter().filter_map(|u| self.entries.get(u)).collect())
             .unwrap_or_default()
     }
 
     /// Number of direct children.
     pub fn children_count(&self, parent: &Parent) -> usize {
-        self.children
-            .get(parent)
-            .map(|v| v.len())
-            .unwrap_or(0)
+        self.children.get(parent).map(|v| v.len()).unwrap_or(0)
     }
 
     /// List children of a folder with filters and sorting applied.
@@ -135,16 +127,18 @@ impl DocumentTree {
             return;
         }
 
-        let children = self.list_children(
-            parent,
-            include_trashed,
-            documents_only,
-            folders_only,
-            sort,
-        );
+        let mut children = self.child_entries(parent);
+        if !include_trashed {
+            children.retain(|entry| !entry.is_trashed());
+        }
+        sort_entries(&mut children, sort);
 
         for entry in children {
-            result.push((current_depth, entry));
+            let include_entry =
+                (!documents_only || entry.is_document()) && (!folders_only || entry.is_folder());
+            if include_entry {
+                result.push((current_depth, entry));
+            }
             if entry.is_folder() {
                 self.collect_recursive(
                     &Parent::Folder(entry.uuid),
@@ -165,13 +159,11 @@ fn sort_entries(entries: &mut [&DocumentEntry], sort: Option<&SortField>) {
     match sort {
         Some(SortField::Name) | None => {
             entries.sort_by(|a, b| {
-                a.is_document()
-                    .cmp(&b.is_document())
-                    .then_with(|| {
-                        a.visible_name
-                            .to_lowercase()
-                            .cmp(&b.visible_name.to_lowercase())
-                    })
+                a.is_document().cmp(&b.is_document()).then_with(|| {
+                    a.visible_name
+                        .to_lowercase()
+                        .cmp(&b.visible_name.to_lowercase())
+                })
             });
         }
         Some(SortField::Modified) => {
@@ -179,13 +171,11 @@ fn sort_entries(entries: &mut [&DocumentEntry], sort: Option<&SortField>) {
         }
         Some(SortField::Type) => {
             entries.sort_by(|a, b| {
-                a.type_sort_key()
-                    .cmp(&b.type_sort_key())
-                    .then_with(|| {
-                        a.visible_name
-                            .to_lowercase()
-                            .cmp(&b.visible_name.to_lowercase())
-                    })
+                a.type_sort_key().cmp(&b.type_sort_key()).then_with(|| {
+                    a.visible_name
+                        .to_lowercase()
+                        .cmp(&b.visible_name.to_lowercase())
+                })
             });
         }
     }
@@ -245,6 +235,7 @@ mod tests {
     const DOC_2: &str = "bbbbbbbb-0000-0000-0000-000000000002";
     const DOC_3: &str = "bbbbbbbb-0000-0000-0000-000000000003";
     const DOC_4: &str = "bbbbbbbb-0000-0000-0000-000000000004";
+    const DOC_5: &str = "bbbbbbbb-0000-0000-0000-000000000005";
     const DOC_TRASH: &str = "cccccccc-0000-0000-0000-000000000001";
 
     fn sample_entries() -> Vec<DocumentEntry> {
@@ -298,6 +289,42 @@ mod tests {
         ]
     }
 
+    fn nested_document_entries() -> Vec<DocumentEntry> {
+        let folder_a_uuid = Uuid::parse_str(FOLDER_A).unwrap();
+        let folder_b_uuid = Uuid::parse_str(FOLDER_B).unwrap();
+        vec![
+            make_entry(FOLDER_A, "Work", ItemType::Collection, Parent::Root, None),
+            make_entry(
+                FOLDER_B,
+                "Projects",
+                ItemType::Collection,
+                Parent::Folder(folder_a_uuid),
+                None,
+            ),
+            make_entry(
+                DOC_1,
+                "Meeting Notes",
+                ItemType::Document,
+                Parent::Folder(folder_a_uuid),
+                Some(FileType::Notebook),
+            ),
+            make_entry(
+                DOC_5,
+                "Design Doc",
+                ItemType::Document,
+                Parent::Folder(folder_b_uuid),
+                Some(FileType::Pdf),
+            ),
+            make_entry(
+                DOC_3,
+                "Quick Note",
+                ItemType::Document,
+                Parent::Root,
+                Some(FileType::Notebook),
+            ),
+        ]
+    }
+
     #[test]
     fn build_and_get() {
         let tree = DocumentTree::build(sample_entries());
@@ -347,10 +374,7 @@ mod tests {
         );
         assert_eq!(tree.children_count(&Parent::Trash), 1);
         // Non-existent folder
-        assert_eq!(
-            tree.children_count(&Parent::Folder(Uuid::new_v4())),
-            0
-        );
+        assert_eq!(tree.children_count(&Parent::Folder(Uuid::new_v4())), 0);
     }
 
     #[test]
@@ -397,13 +421,7 @@ mod tests {
     #[test]
     fn list_children_sort_by_type() {
         let tree = DocumentTree::build(sample_entries());
-        let items = tree.list_children(
-            &Parent::Root,
-            false,
-            false,
-            false,
-            Some(&SortField::Type),
-        );
+        let items = tree.list_children(&Parent::Root, false, false, false, Some(&SortField::Type));
         let names: Vec<_> = items.iter().map(|e| e.visible_name.as_str()).collect();
         // folders (Personal, Work) → notebook (Quick Note) → epub (Rust Book)
         assert_eq!(names, vec!["Personal", "Work", "Quick Note", "Rust Book"]);
@@ -440,6 +458,22 @@ mod tests {
         let items = tree.list_recursive(&Parent::Root, Some(2), false, false, false, None);
         // Root-level + one level deep
         assert_eq!(items.len(), 6);
+    }
+
+    #[test]
+    fn list_recursive_documents_only_includes_nested_documents() {
+        let tree = DocumentTree::build(nested_document_entries());
+        let items = tree.list_recursive(&Parent::Root, None, false, true, false, None);
+
+        let path_order: Vec<_> = items
+            .iter()
+            .map(|(depth, entry)| (*depth, entry.visible_name.as_str()))
+            .collect();
+        assert_eq!(
+            path_order,
+            vec![(2, "Design Doc"), (1, "Meeting Notes"), (0, "Quick Note")]
+        );
+        assert!(items.iter().all(|(_, e)| e.is_document()));
     }
 
     #[test]
@@ -485,9 +519,6 @@ mod tests {
         // Not in root
         assert!(tree.child_entries(&Parent::Root).is_empty());
         // In its orphan parent bucket
-        assert_eq!(
-            tree.children_count(&Parent::Folder(orphan_parent)),
-            1
-        );
+        assert_eq!(tree.children_count(&Parent::Folder(orphan_parent)), 1);
     }
 }

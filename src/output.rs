@@ -13,13 +13,19 @@ pub enum OutputFormat {
 }
 
 pub fn print_json(value: &impl Serialize) {
-    println!("{}", serde_json::to_string(value).expect("failed to serialize JSON"));
+    println!(
+        "{}",
+        serde_json::to_string(value).expect("failed to serialize JSON")
+    );
 }
 
 pub fn print_error(error: &CliError, format: OutputFormat) {
     match format {
         OutputFormat::Json => {
-            eprintln!("{}", serde_json::to_string(&error.to_json()).expect("failed to serialize JSON"));
+            eprintln!(
+                "{}",
+                serde_json::to_string(&error.to_json()).expect("failed to serialize JSON")
+            );
         }
         OutputFormat::Human => {
             eprintln!("Error: {error}");

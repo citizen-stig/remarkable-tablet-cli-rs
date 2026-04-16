@@ -137,8 +137,13 @@ async fn authenticate(
 async fn try_agent(handle: &mut Handle<ClientHandler>, user: &str) -> anyhow::Result<bool> {
     use russh::keys::agent::client::AgentClient;
     let sock = std::env::var("SSH_AUTH_SOCK").map_err(|_| anyhow!("no SSH_AUTH_SOCK"))?;
-    let mut agent = AgentClient::connect_uds(sock).await.context("connect agent")?;
-    let identities = agent.request_identities().await.context("list identities")?;
+    let mut agent = AgentClient::connect_uds(sock)
+        .await
+        .context("connect agent")?;
+    let identities = agent
+        .request_identities()
+        .await
+        .context("list identities")?;
     for pubkey in identities {
         let auth = handle
             .authenticate_publickey_with(user, pubkey, Some(HashAlg::Sha512), &mut agent)

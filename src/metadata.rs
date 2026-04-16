@@ -255,7 +255,10 @@ mod tests {
     fn parent_serde_root() {
         let p = Parent::Root;
         assert_eq!(serde_json::to_string(&p).unwrap(), r#""""#);
-        assert_eq!(serde_json::from_str::<Parent>(r#""""#).unwrap(), Parent::Root);
+        assert_eq!(
+            serde_json::from_str::<Parent>(r#""""#).unwrap(),
+            Parent::Root
+        );
     }
 
     #[test]
