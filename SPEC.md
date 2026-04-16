@@ -221,34 +221,20 @@ tests/
 
 ### Testability: `TabletConnection` trait
 
-The core abstraction for testability. Defined in `connection.rs` using native async-in-traits (edition 2024) with explicit `impl Future<Output = …> + Send` returns so Send bounds are part of the trait contract:
+The core abstraction for testability. Defined in `connection.rs` using native `async fn` in traits (edition 2024):
 
 ```rust
-use std::future::Future;
-
-pub trait TabletConnection: Send + Sync {
-    fn read_file(
-        &self, path: &str,
-    ) -> impl Future<Output = anyhow::Result<Vec<u8>>> + Send;
-    fn write_file(
-        &self, path: &str, data: &[u8],
-    ) -> impl Future<Output = anyhow::Result<()>> + Send;
-    fn list_dir(
-        &self, path: &str,
-    ) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send;
-    fn remove_file(
-        &self, path: &str,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send;
-    fn execute(
-        &self, command: &str,
-    ) -> impl Future<Output = anyhow::Result<String>> + Send;
-    fn file_exists(
-        &self, path: &str,
-    ) -> impl Future<Output = anyhow::Result<bool>> + Send;
+pub trait TabletConnection {
+    async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>>;
+    async fn write_file(&self, path: &str, data: &[u8]) -> anyhow::Result<()>;
+    async fn list_dir(&self, path: &str) -> anyhow::Result<Vec<String>>;
+    async fn remove_file(&self, path: &str) -> anyhow::Result<()>;
+    async fn execute(&self, command: &str) -> anyhow::Result<String>;
+    async fn file_exists(&self, path: &str) -> anyhow::Result<bool>;
 }
 ```
 
-Path arguments are `&str` because they represent remote SFTP paths, which are UTF-8 strings per RFC 4251 §5 and draft-ietf-secsh-filexfer — not local OS-native paths. `std::path::Path` would be semantically wrong here (it carries OS-specific encoding and separator rules that don't apply to remote paths). Consumers take `&C` with `C: TabletConnection` (generic monomorphization) rather than `&dyn TabletConnection` — we don't need heterogeneous connection collections.
+Path arguments are `&str` because they represent remote SFTP paths, which are UTF-8 strings per RFC 4251 §5 and draft-ietf-secsh-filexfer — not local OS-native paths. `std::path::Path` would be semantically wrong here (it carries OS-specific encoding and separator rules that don't apply to remote paths). No explicit `Send` bounds on the returned futures — nothing in the crate spawns tasks, so `Send` is not required. If `tokio::spawn` is introduced later, add bounds at that point. Consumers take `&C` with `C: TabletConnection` (generic monomorphization) rather than `&dyn TabletConnection`.
 
 - **Production**: `SshConnection` implements the trait via `russh`/`russh-sftp` (TCP probe → SSH handshake → SFTP subsystem). Auth tries SSH agent → key-file → password in order. Host-key verification accepts any server key — USB-connected tablets reflash their host key regularly; strict checking is impractical.
 - **Tests**: `FakeConnection` (also in `connection.rs`, exported publicly) operates on a `tempfile::TempDir`, enabling offline unit and integration tests. `set_file`, `mkdir`, and `set_command_output` let a test populate remote state; `execute` looks up registered substrings in the command.
@@ -273,7 +259,7 @@ Why `russh` is pinned to `=0.57.1`: as of April 2026 the latest `russh` (0.60.0)
 
 Why `anyhow` + `thiserror`: internal fallible code returns `anyhow::Result<T>`. Errors that need specific JSON codes are attached via `anyhow::Error::new(CliError::…)`; the top-level `execute` in each command downcasts at the output boundary. Generic errors fall through to `CliError::IoError`. This keeps propagation ergonomic while preserving the structured error contract for agent consumers.
 
-No `async-trait`: edition 2024 supports native async-in-traits with explicit `impl Future<…> + Send` returns. The crate is object-safety-free (see `TabletConnection` discussion above), which suits our use pattern and avoids the macro.
+No `async-trait`: edition 2024 supports native `async fn` in traits. The trait uses plain `async fn` without explicit `Send` bounds — nothing in the crate spawns tasks, so `Send` is unnecessary.
 
 Custom .rm parser over external crate: format is small and well-specified, avoids dependency on potentially unmaintained crates.
 
