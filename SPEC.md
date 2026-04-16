@@ -225,31 +225,30 @@ The core abstraction for testability. Defined in `connection.rs` using native as
 
 ```rust
 use std::future::Future;
-use std::path::Path;
 
 pub trait TabletConnection: Send + Sync {
-    fn read_file<P: AsRef<Path> + Send>(
-        &self, path: P,
+    fn read_file(
+        &self, path: &str,
     ) -> impl Future<Output = anyhow::Result<Vec<u8>>> + Send;
-    fn write_file<P: AsRef<Path> + Send>(
-        &self, path: P, data: &[u8],
+    fn write_file(
+        &self, path: &str, data: &[u8],
     ) -> impl Future<Output = anyhow::Result<()>> + Send;
-    fn list_dir<P: AsRef<Path> + Send>(
-        &self, path: P,
+    fn list_dir(
+        &self, path: &str,
     ) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send;
-    fn remove_file<P: AsRef<Path> + Send>(
-        &self, path: P,
+    fn remove_file(
+        &self, path: &str,
     ) -> impl Future<Output = anyhow::Result<()>> + Send;
     fn execute(
         &self, command: &str,
     ) -> impl Future<Output = anyhow::Result<String>> + Send;
-    fn file_exists<P: AsRef<Path> + Send>(
-        &self, path: P,
+    fn file_exists(
+        &self, path: &str,
     ) -> impl Future<Output = anyhow::Result<bool>> + Send;
 }
 ```
 
-Generic path args (`impl AsRef<Path> + Send`) let callers pass `&str`, `String`, `&Path`, or `PathBuf` interchangeably. Consumers take `&C` with `C: TabletConnection` (generic monomorphization) rather than `&dyn TabletConnection` — the trait is not object-safe because of the generic methods, which is an acceptable trade-off since we don't need heterogeneous connection collections.
+Path arguments are `&str` because they represent remote SFTP paths, which are UTF-8 strings per RFC 4251 §5 and draft-ietf-secsh-filexfer — not local OS-native paths. `std::path::Path` would be semantically wrong here (it carries OS-specific encoding and separator rules that don't apply to remote paths). Consumers take `&C` with `C: TabletConnection` (generic monomorphization) rather than `&dyn TabletConnection` — we don't need heterogeneous connection collections.
 
 - **Production**: `SshConnection` implements the trait via `russh`/`russh-sftp` (TCP probe → SSH handshake → SFTP subsystem). Auth tries SSH agent → key-file → password in order. Host-key verification accepts any server key — USB-connected tablets reflash their host key regularly; strict checking is impractical.
 - **Tests**: `FakeConnection` (also in `connection.rs`, exported publicly) operates on a `tempfile::TempDir`, enabling offline unit and integration tests. `set_file`, `mkdir`, and `set_command_output` let a test populate remote state; `execute` looks up registered substrings in the command.

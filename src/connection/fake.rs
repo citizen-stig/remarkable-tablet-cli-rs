@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, bail};
 use tempfile::TempDir;
@@ -18,13 +18,12 @@ impl FakeConnection {
         }
     }
 
-    fn local<P: AsRef<Path>>(&self, remote: P) -> PathBuf {
-        let s = remote.as_ref().to_string_lossy();
-        let rel = s.trim_start_matches('/');
+    fn local(&self, remote: &str) -> PathBuf {
+        let rel = remote.trim_start_matches('/');
         self.root.path().join(rel)
     }
 
-    pub fn set_file<P: AsRef<Path>>(&self, path: P, data: impl AsRef<[u8]>) {
+    pub fn set_file(&self, path: &str, data: impl AsRef<[u8]>) {
         let p = self.local(path);
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent).unwrap();
@@ -32,7 +31,7 @@ impl FakeConnection {
         std::fs::write(&p, data.as_ref()).unwrap();
     }
 
-    pub fn mkdir<P: AsRef<Path>>(&self, path: P) {
+    pub fn mkdir(&self, path: &str) {
         std::fs::create_dir_all(self.local(path)).unwrap();
     }
 
@@ -53,25 +52,21 @@ impl Default for FakeConnection {
 }
 
 impl TabletConnection for FakeConnection {
-    async fn read_file<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<Vec<u8>> {
-        let p = self.local(&path);
+    async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>> {
+        let p = self.local(path);
         std::fs::read(&p).with_context(|| format!("fake read_file {}", p.display()))
     }
 
-    async fn write_file<P: AsRef<Path> + Send>(
-        &self,
-        path: P,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        let p = self.local(&path);
+    async fn write_file(&self, path: &str, data: &[u8]) -> anyhow::Result<()> {
+        let p = self.local(path);
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&p, data).with_context(|| format!("fake write_file {}", p.display()))
     }
 
-    async fn list_dir<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<Vec<String>> {
-        let p = self.local(&path);
+    async fn list_dir(&self, path: &str) -> anyhow::Result<Vec<String>> {
+        let p = self.local(path);
         let entries =
             std::fs::read_dir(&p).with_context(|| format!("fake list_dir {}", p.display()))?;
         let mut out = Vec::new();
@@ -83,8 +78,8 @@ impl TabletConnection for FakeConnection {
         Ok(out)
     }
 
-    async fn remove_file<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<()> {
-        let p = self.local(&path);
+    async fn remove_file(&self, path: &str) -> anyhow::Result<()> {
+        let p = self.local(path);
         std::fs::remove_file(&p).with_context(|| format!("fake remove_file {}", p.display()))
     }
 
@@ -98,7 +93,7 @@ impl TabletConnection for FakeConnection {
         bail!("fake execute: no registered output for command `{command}`")
     }
 
-    async fn file_exists<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<bool> {
-        Ok(self.local(&path).exists())
+    async fn file_exists(&self, path: &str) -> anyhow::Result<bool> {
+        Ok(self.local(path).exists())
     }
 }

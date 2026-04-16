@@ -179,41 +179,27 @@ fn verbose(opts: &ConnectOptions, msg: &str) {
     }
 }
 
-fn path_to_string<P: AsRef<Path>>(path: P) -> anyhow::Result<String> {
-    path.as_ref()
-        .to_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("non-UTF-8 path: {}", path.as_ref().display()))
-}
-
 impl TabletConnection for SshConnection {
-    async fn read_file<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<Vec<u8>> {
-        let s = path_to_string(&path)?;
+    async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>> {
         let sftp = self.sftp.lock().await;
-        sftp.read(s)
+        sftp.read(path)
             .await
-            .with_context(|| format!("sftp read {}", path.as_ref().display()))
+            .with_context(|| format!("sftp read {path}"))
     }
 
-    async fn write_file<P: AsRef<Path> + Send>(
-        &self,
-        path: P,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        let s = path_to_string(&path)?;
+    async fn write_file(&self, path: &str, data: &[u8]) -> anyhow::Result<()> {
         let sftp = self.sftp.lock().await;
-        sftp.write(s, data)
+        sftp.write(path, data)
             .await
-            .with_context(|| format!("sftp write {}", path.as_ref().display()))
+            .with_context(|| format!("sftp write {path}"))
     }
 
-    async fn list_dir<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<Vec<String>> {
-        let s = path_to_string(&path)?;
+    async fn list_dir(&self, path: &str) -> anyhow::Result<Vec<String>> {
         let sftp = self.sftp.lock().await;
         let dir = sftp
-            .read_dir(s)
+            .read_dir(path)
             .await
-            .with_context(|| format!("sftp read_dir {}", path.as_ref().display()))?;
+            .with_context(|| format!("sftp read_dir {path}"))?;
         let mut out = Vec::new();
         for entry in dir {
             let name = entry.file_name();
@@ -224,12 +210,11 @@ impl TabletConnection for SshConnection {
         Ok(out)
     }
 
-    async fn remove_file<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<()> {
-        let s = path_to_string(&path)?;
+    async fn remove_file(&self, path: &str) -> anyhow::Result<()> {
         let sftp = self.sftp.lock().await;
-        sftp.remove_file(s)
+        sftp.remove_file(path)
             .await
-            .with_context(|| format!("sftp remove_file {}", path.as_ref().display()))
+            .with_context(|| format!("sftp remove_file {path}"))
     }
 
     async fn execute(&self, command: &str) -> anyhow::Result<String> {
@@ -254,11 +239,10 @@ impl TabletConnection for SshConnection {
         String::from_utf8(buf).context("command output not UTF-8")
     }
 
-    async fn file_exists<P: AsRef<Path> + Send>(&self, path: P) -> anyhow::Result<bool> {
-        let s = path_to_string(&path)?;
+    async fn file_exists(&self, path: &str) -> anyhow::Result<bool> {
         let sftp = self.sftp.lock().await;
-        sftp.try_exists(s)
+        sftp.try_exists(path)
             .await
-            .map_err(|e| anyhow::Error::new(e).context(format!("sftp stat {}", path.as_ref().display())))
+            .map_err(|e| anyhow::Error::new(e).context(format!("sftp stat {path}")))
     }
 }
