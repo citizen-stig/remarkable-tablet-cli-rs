@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use anyhow::anyhow;
 use uuid::Uuid;
 
 use crate::cli::SortField;
@@ -86,6 +87,8 @@ impl DocumentTree {
     ///
     /// Returns `(depth_level, entry)` pairs. `depth = None` means unlimited.
     /// `depth = Some(1)` means direct children only.
+    ///
+    /// Returns an error when traversal encounters a parent cycle.
     pub fn list_recursive(
         &self,
         parent: &Parent,
@@ -94,8 +97,12 @@ impl DocumentTree {
         documents_only: bool,
         folders_only: bool,
         sort: Option<&SortField>,
-    ) -> Vec<(u32, &DocumentEntry)> {
+    ) -> anyhow::Result<Vec<(u32, &DocumentEntry)>> {
         let mut result = Vec::new();
+        let mut ancestors = HashSet::new();
+        if let Parent::Folder(uuid) = parent {
+            ancestors.insert(*uuid);
+        }
         self.collect_recursive(
             parent,
             0,
@@ -104,9 +111,10 @@ impl DocumentTree {
             documents_only,
             folders_only,
             sort,
+            &mut ancestors,
             &mut result,
-        );
-        result
+        )?;
+        Ok(result)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -119,12 +127,13 @@ impl DocumentTree {
         documents_only: bool,
         folders_only: bool,
         sort: Option<&SortField>,
+        ancestors: &mut HashSet<Uuid>,
         result: &mut Vec<(u32, &'a DocumentEntry)>,
-    ) {
+    ) -> anyhow::Result<()> {
         if let Some(max) = max_depth
             && current_depth >= max
         {
-            return;
+            return Ok(());
         }
 
         let mut children = self.child_entries(parent);
@@ -140,6 +149,12 @@ impl DocumentTree {
                 result.push((current_depth, entry));
             }
             if entry.is_folder() {
+                if !ancestors.insert(entry.uuid) {
+                    return Err(anyhow!(
+                        "cycle detected while traversing folder UUID {}",
+                        entry.uuid
+                    ));
+                }
                 self.collect_recursive(
                     &Parent::Folder(entry.uuid),
                     current_depth + 1,
@@ -148,10 +163,14 @@ impl DocumentTree {
                     documents_only,
                     folders_only,
                     sort,
+                    ancestors,
                     result,
-                );
+                )?;
+                ancestors.remove(&entry.uuid);
             }
         }
+
+        Ok(())
     }
 }
 
@@ -430,7 +449,9 @@ mod tests {
     #[test]
     fn list_recursive_unlimited() {
         let tree = DocumentTree::build(sample_entries());
-        let items = tree.list_recursive(&Parent::Root, None, false, false, false, None);
+        let items = tree
+            .list_recursive(&Parent::Root, None, false, false, false, None)
+            .unwrap();
         // Root items + children of Work and Personal
         // Work (0), Meeting Notes (1), Report.pdf (1), Personal (0), Quick Note (0), Rust Book (0)
         assert_eq!(items.len(), 6);
@@ -446,7 +467,9 @@ mod tests {
     #[test]
     fn list_recursive_depth_1() {
         let tree = DocumentTree::build(sample_entries());
-        let items = tree.list_recursive(&Parent::Root, Some(1), false, false, false, None);
+        let items = tree
+            .list_recursive(&Parent::Root, Some(1), false, false, false, None)
+            .unwrap();
         // Only root-level items, no descent into folders
         assert_eq!(items.len(), 4);
         assert!(items.iter().all(|(d, _)| *d == 0));
@@ -455,7 +478,9 @@ mod tests {
     #[test]
     fn list_recursive_depth_2() {
         let tree = DocumentTree::build(sample_entries());
-        let items = tree.list_recursive(&Parent::Root, Some(2), false, false, false, None);
+        let items = tree
+            .list_recursive(&Parent::Root, Some(2), false, false, false, None)
+            .unwrap();
         // Root-level + one level deep
         assert_eq!(items.len(), 6);
     }
@@ -463,7 +488,9 @@ mod tests {
     #[test]
     fn list_recursive_documents_only_includes_nested_documents() {
         let tree = DocumentTree::build(nested_document_entries());
-        let items = tree.list_recursive(&Parent::Root, None, false, true, false, None);
+        let items = tree
+            .list_recursive(&Parent::Root, None, false, true, false, None)
+            .unwrap();
 
         let path_order: Vec<_> = items
             .iter()
@@ -474,6 +501,66 @@ mod tests {
             vec![(2, "Design Doc"), (1, "Meeting Notes"), (0, "Quick Note")]
         );
         assert!(items.iter().all(|(_, e)| e.is_document()));
+    }
+
+    #[test]
+    fn list_recursive_errors_on_self_cycle() {
+        let folder_uuid = Uuid::parse_str(FOLDER_A).unwrap();
+        let tree = DocumentTree::build(vec![make_entry(
+            FOLDER_A,
+            "Loop",
+            ItemType::Collection,
+            Parent::Folder(folder_uuid),
+            None,
+        )]);
+
+        let err = tree
+            .list_recursive(
+                &Parent::Folder(folder_uuid),
+                None,
+                false,
+                false,
+                false,
+                None,
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("cycle detected"));
+    }
+
+    #[test]
+    fn list_recursive_errors_on_two_folder_cycle() {
+        let folder_a_uuid = Uuid::parse_str(FOLDER_A).unwrap();
+        let folder_b_uuid = Uuid::parse_str(FOLDER_B).unwrap();
+        let tree = DocumentTree::build(vec![
+            make_entry(
+                FOLDER_A,
+                "Folder A",
+                ItemType::Collection,
+                Parent::Folder(folder_b_uuid),
+                None,
+            ),
+            make_entry(
+                FOLDER_B,
+                "Folder B",
+                ItemType::Collection,
+                Parent::Folder(folder_a_uuid),
+                None,
+            ),
+        ]);
+
+        let err = tree
+            .list_recursive(
+                &Parent::Folder(folder_a_uuid),
+                None,
+                false,
+                false,
+                false,
+                None,
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("cycle detected"));
     }
 
     #[test]

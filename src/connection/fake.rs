@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::{Context, anyhow, bail};
 use tempfile::TempDir;
 
 use super::TabletConnection;
@@ -8,6 +9,7 @@ use super::TabletConnection;
 pub struct FakeConnection {
     root: TempDir,
     commands: std::sync::Mutex<Vec<(String, String)>>,
+    read_errors: std::sync::Mutex<HashMap<String, String>>,
 }
 
 impl FakeConnection {
@@ -15,6 +17,7 @@ impl FakeConnection {
         Self {
             root: tempfile::tempdir().expect("tempdir"),
             commands: std::sync::Mutex::new(Vec::new()),
+            read_errors: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -43,6 +46,13 @@ impl FakeConnection {
             cmds.push((cmd_substring.to_string(), output.to_string()));
         }
     }
+
+    pub fn set_read_error(&self, path: &str, message: &str) {
+        self.read_errors
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), message.to_string());
+    }
 }
 
 impl Default for FakeConnection {
@@ -53,6 +63,11 @@ impl Default for FakeConnection {
 
 impl TabletConnection for FakeConnection {
     async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>> {
+        if let Some(message) = self.read_errors.lock().unwrap().get(path).cloned() {
+            return Err(anyhow!(
+                "fake injected read_file error for {path}: {message}"
+            ));
+        }
         let p = self.local(path);
         std::fs::read(&p).with_context(|| format!("fake read_file {}", p.display()))
     }

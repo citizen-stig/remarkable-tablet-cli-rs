@@ -118,7 +118,8 @@ async fn fetch_disk<C: TabletConnection>(
 /// Load all document/folder metadata from the tablet's xochitl data directory.
 ///
 /// Entries that fail to parse are silently skipped so one corrupt file
-/// doesn't prevent listing the rest.
+/// doesn't prevent listing the rest, but metadata read failures abort
+/// the load to avoid returning a partial tree.
 pub async fn load_all_metadata<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
@@ -137,10 +138,10 @@ pub async fn load_all_metadata<C: TabletConnection>(
 
     for uuid in uuids {
         let meta_path = format!("{data_dir}/{uuid}.metadata");
-        let meta_bytes = match conn.read_file(&meta_path).await {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
+        let meta_bytes = conn
+            .read_file(&meta_path)
+            .await
+            .with_context(|| format!("read {meta_path}"))?;
         let raw = match metadata::parse_metadata(&meta_bytes) {
             Ok(m) => m,
             Err(_) => continue,
@@ -311,6 +312,38 @@ mod tests {
         let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].visible_name, "OK");
+    }
+
+    #[tokio::test]
+    async fn load_metadata_fails_on_unreadable_metadata() {
+        let conn = FakeConnection::new();
+        conn.mkdir(DATA_DIR);
+
+        let doc_uuid = "11111111-2222-3333-4444-555555555555";
+        let folder_uuid = "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb";
+
+        set_metadata(
+            &conn,
+            doc_uuid,
+            &format!(
+                r#"{{"visibleName":"Notes","type":"DocumentType","parent":"{folder_uuid}","deleted":false,"pinned":false,"lastModified":1710604800000,"metadatamodified":1710604800000,"version":1}}"#
+            ),
+        );
+        set_content(&conn, doc_uuid, r#"{"fileType":"notebook"}"#);
+        set_metadata(
+            &conn,
+            folder_uuid,
+            r#"{"visibleName":"Work","type":"CollectionType","parent":"","deleted":false,"pinned":false,"lastModified":1710518400000,"metadatamodified":1710518400000,"version":1}"#,
+        );
+
+        let folder_meta_path = format!("{DATA_DIR}/{folder_uuid}.metadata");
+        conn.set_read_error(&folder_meta_path, "permission denied");
+
+        let err = load_all_metadata(&conn, DATA_DIR).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("read {folder_meta_path}"))
+        );
     }
 
     #[tokio::test]

@@ -27,13 +27,13 @@ fn setup_fake_tablet() -> FakeConnection {
     // Nested folder: Work/Projects
     conn.set_file(
         &format!("{DATA_DIR}/{FOLDER_PROJECTS}.metadata"),
-        &format!(r#"{{"visibleName":"Projects","type":"CollectionType","parent":"{FOLDER_WORK}","deleted":false,"pinned":false,"lastModified":1710518400000,"metadatamodified":1710518400000,"version":1}}"#),
+        format!(r#"{{"visibleName":"Projects","type":"CollectionType","parent":"{FOLDER_WORK}","deleted":false,"pinned":false,"lastModified":1710518400000,"metadatamodified":1710518400000,"version":1}}"#),
     );
 
     // Document: Work/Meeting Notes (notebook)
     conn.set_file(
         &format!("{DATA_DIR}/{DOC_NOTES}.metadata"),
-        &format!(r#"{{"visibleName":"Meeting Notes","type":"DocumentType","parent":"{FOLDER_WORK}","deleted":false,"pinned":false,"lastModified":1710604800000,"metadatamodified":1710604800000,"version":1,"tags":["work","meetings"]}}"#),
+        format!(r#"{{"visibleName":"Meeting Notes","type":"DocumentType","parent":"{FOLDER_WORK}","deleted":false,"pinned":false,"lastModified":1710604800000,"metadatamodified":1710604800000,"version":1,"tags":["work","meetings"]}}"#),
     );
     conn.set_file(
         &format!("{DATA_DIR}/{DOC_NOTES}.content"),
@@ -43,7 +43,7 @@ fn setup_fake_tablet() -> FakeConnection {
     // Document: Work/Projects/Research Paper (pdf)
     conn.set_file(
         &format!("{DATA_DIR}/{DOC_PAPER}.metadata"),
-        &format!(r#"{{"visibleName":"Research Paper","type":"DocumentType","parent":"{FOLDER_PROJECTS}","deleted":false,"pinned":false,"lastModified":1710700000000,"metadatamodified":1710700000000,"version":1,"tags":["research"]}}"#),
+        format!(r#"{{"visibleName":"Research Paper","type":"DocumentType","parent":"{FOLDER_PROJECTS}","deleted":false,"pinned":false,"lastModified":1710700000000,"metadatamodified":1710700000000,"version":1,"tags":["research"]}}"#),
     );
     conn.set_file(
         &format!("{DATA_DIR}/{DOC_PAPER}.content"),
@@ -158,7 +158,9 @@ async fn recursive_tree_listing() {
     let tree = DocumentTree::build(entries);
 
     // Full recursive listing from root (excluding trash)
-    let all = tree.list_recursive(&Parent::Root, None, false, false, false, None);
+    let all = tree
+        .list_recursive(&Parent::Root, None, false, false, false, None)
+        .unwrap();
     // Work(0), Meeting Notes(1), Projects(1), Research Paper(2), Quick Read(0)
     assert_eq!(all.len(), 5);
 
