@@ -113,23 +113,34 @@ fn build_matcher(pattern: &str, case_sensitive: bool) -> anyhow::Result<Matcher>
 // ---------------------------------------------------------------------------
 
 fn print_output(items: &[FindItem], format: OutputFormat) {
+    println!("{}", format_output(items, format));
+}
+
+/// # Panics
+/// Panics if `items` cannot be serialized as JSON.
+#[must_use]
+pub fn format_output(items: &[FindItem], format: OutputFormat) -> String {
     match format {
-        OutputFormat::Json => output::print_json(items),
-        OutputFormat::Human => print_human(items),
+        OutputFormat::Json => output::render_json(items),
+        OutputFormat::Human => format_human(items),
     }
 }
 
-fn print_human(items: &[FindItem]) {
+#[must_use]
+pub fn format_human(items: &[FindItem]) -> String {
     if items.is_empty() {
-        println!("(no matches)");
-        return;
+        return "(no matches)".to_string();
     }
-    for item in items {
-        println!(
-            "{}  [{}]  {}",
-            item.path,
-            common::type_label(&item.kind),
-            item.uuid,
-        );
-    }
+    items
+        .iter()
+        .map(|item| {
+            format!(
+                "{}  [{}]  {}",
+                item.path,
+                common::type_label(&item.kind),
+                item.uuid,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

@@ -224,3 +224,130 @@ async fn discover_host(global: &GlobalOptions, cfg: &ResolvedConfig) -> anyhow::
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::{FileType, ItemKind, Parent};
+    use crate::tree::DocumentTree;
+    use chrono::TimeZone;
+
+    fn make_doc(uuid: &str, name: &str, parent: Parent, file_type: FileType) -> DocumentEntry {
+        let deleted = parent == Parent::Trash;
+        DocumentEntry {
+            uuid: Uuid::parse_str(uuid).unwrap(),
+            visible_name: name.to_string(),
+            kind: ItemKind::Document {
+                file_type,
+                page_count: None,
+            },
+            parent,
+            deleted,
+            pinned: false,
+            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
+            version: 1,
+            tags: vec![],
+            last_opened: None,
+        }
+    }
+
+    #[test]
+    fn type_label_covers_all_kinds() {
+        assert_eq!(type_label(&ItemKind::Folder), "folder");
+        assert_eq!(
+            type_label(&ItemKind::Document {
+                file_type: FileType::Pdf,
+                page_count: None
+            }),
+            "pdf"
+        );
+        assert_eq!(
+            type_label(&ItemKind::Document {
+                file_type: FileType::Epub,
+                page_count: Some(10)
+            }),
+            "epub"
+        );
+        assert_eq!(
+            type_label(&ItemKind::Document {
+                file_type: FileType::Notebook,
+                page_count: None
+            }),
+            "notebook"
+        );
+        assert_eq!(type_label(&ItemKind::Template), "template");
+    }
+
+    #[test]
+    fn file_type_label_covers_all_file_types() {
+        assert_eq!(file_type_label(FileType::Pdf), "pdf");
+        assert_eq!(file_type_label(FileType::Epub), "epub");
+        assert_eq!(file_type_label(FileType::Notebook), "notebook");
+    }
+
+    #[test]
+    fn entry_view_uses_resolved_path_when_tree_knows_entry() {
+        let entry = make_doc(
+            "11111111-1111-1111-1111-111111111111",
+            "Notes",
+            Parent::Root,
+            FileType::Notebook,
+        );
+        let tree = DocumentTree::build(vec![entry.clone()]);
+        let view = EntryView::from_entry(&tree, &entry);
+        assert_eq!(view.path, "/Notes");
+        assert_eq!(view.name, "Notes");
+        assert_eq!(view.uuid, entry.uuid);
+        assert_eq!(view.parent_uuid, None);
+        assert!(!view.deleted);
+    }
+
+    /// When the entry's parent chain doesn't reach root, `display_path`
+    /// returns `None` and `EntryView` falls back to `/<visible_name>`.
+    /// This shows up as the path for orphans surfaced via UUID-only lookups.
+    #[test]
+    fn entry_view_falls_back_to_synthetic_path_for_orphan() {
+        let entry = make_doc(
+            "22222222-2222-2222-2222-222222222222",
+            "Mystery",
+            Parent::Folder(Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap()),
+            FileType::Pdf,
+        );
+        let tree = DocumentTree::build(vec![]);
+        let view = EntryView::from_entry(&tree, &entry);
+        assert_eq!(view.path, "/Mystery");
+    }
+
+    #[test]
+    fn entry_view_marks_trashed_entries() {
+        let entry = make_doc(
+            "33333333-3333-3333-3333-333333333333",
+            "Old Draft",
+            Parent::Trash,
+            FileType::Pdf,
+        );
+        let tree = DocumentTree::build(vec![entry.clone()]);
+        let view = EntryView::from_entry(&tree, &entry);
+        assert!(view.deleted);
+    }
+
+    #[test]
+    fn to_cli_error_preserves_existing_cli_error() {
+        let err: anyhow::Error = CliError::NotFound("hi".into()).into();
+        let cli = to_cli_error(err);
+        match cli {
+            CliError::NotFound(msg) => assert_eq!(msg, "hi"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_cli_error_wraps_other_errors_as_io_error() {
+        let err = anyhow::anyhow!("plain text error");
+        let cli = to_cli_error(err);
+        match cli {
+            CliError::IoError(msg) => assert!(msg.contains("plain text error")),
+            other => panic!("expected IoError, got {other:?}"),
+        }
+    }
+}

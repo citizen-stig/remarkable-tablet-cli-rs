@@ -1,0 +1,10 @@
+---
+source: tests/output_snapshots.rs
+expression: "ls::format_output(&out, OutputFormat::Human)"
+---
+TYPE      NAME                           MODIFIED           
+folder    /Work                          2024-03-15 16:00:00  2 items
+folder    /Work/Projects                 2024-03-15 16:00:00  1 item
+pdf       /Work/Projects/Research Paper  2024-03-17 18:26:40  24p  tags: research
+notebook  /Work/Meeting Notes            2024-03-16 16:00:00  12p  tags: work, meetings
+epub      /Quick Read                    2024-03-14 07:06:40  300p

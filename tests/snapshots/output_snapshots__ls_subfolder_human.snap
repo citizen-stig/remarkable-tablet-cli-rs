@@ -1,0 +1,7 @@
+---
+source: tests/output_snapshots.rs
+expression: "ls::format_output(&out, OutputFormat::Human)"
+---
+TYPE      NAME           MODIFIED           
+folder    Projects/      2024-03-15 16:00:00  1 item
+notebook  Meeting Notes  2024-03-16 16:00:00  12p  tags: work, meetings

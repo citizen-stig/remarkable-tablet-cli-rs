@@ -82,40 +82,48 @@ pub async fn run_with_conn<C: TabletConnection>(
 }
 
 fn print_output(info: &InfoOutput, format: OutputFormat) {
+    println!("{}", format_output(info, format));
+}
+
+/// # Panics
+/// Panics if `info` cannot be serialized as JSON.
+#[must_use]
+pub fn format_output(info: &InfoOutput, format: OutputFormat) -> String {
     match format {
-        OutputFormat::Json => output::print_json(info),
-        OutputFormat::Human => print_human(info),
+        OutputFormat::Json => output::render_json(info),
+        OutputFormat::Human => format_human(info),
     }
 }
 
-fn print_human(info: &InfoOutput) {
+#[must_use]
+pub fn format_human(info: &InfoOutput) -> String {
     let e = &info.entry;
-    println!("uuid:      {}", e.uuid);
-    println!("path:      {}", e.path);
-    println!("name:      {}", e.name);
-    println!("type:      {}", common::type_label(&e.kind));
+    let mut lines = vec![
+        format!("uuid:      {}", e.uuid),
+        format!("path:      {}", e.path),
+        format!("name:      {}", e.name),
+        format!("type:      {}", common::type_label(&e.kind)),
+    ];
     if let crate::metadata::ItemKind::Document { file_type, .. } = e.kind {
-        println!("file_type: {}", common::file_type_label(file_type));
+        lines.push(format!("file_type: {}", common::file_type_label(file_type)));
     }
     if e.pinned {
-        println!("pinned:    true");
+        lines.push("pinned:    true".to_string());
     }
     if e.deleted {
-        println!("deleted:   true");
+        lines.push("deleted:   true".to_string());
     }
     if !e.tags.is_empty() {
-        println!("tags:      {}", e.tags.join(", "));
+        lines.push(format!("tags:      {}", e.tags.join(", ")));
     }
-    println!();
-    println!("metadata:");
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&info.metadata).unwrap_or_default()
-    );
-    println!();
-    println!("content:");
-    match &info.content {
-        Some(c) => println!("{}", serde_json::to_string_pretty(c).unwrap_or_default()),
-        None => println!("null"),
-    }
+    lines.push(String::new());
+    lines.push("metadata:".to_string());
+    lines.push(serde_json::to_string_pretty(&info.metadata).unwrap_or_default());
+    lines.push(String::new());
+    lines.push("content:".to_string());
+    lines.push(match &info.content {
+        Some(c) => serde_json::to_string_pretty(c).unwrap_or_default(),
+        None => "null".to_string(),
+    });
+    lines.join("\n")
 }

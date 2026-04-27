@@ -1,0 +1,5 @@
+---
+source: tests/output_snapshots.rs
+expression: "find::format_output(&items, OutputFormat::Human)"
+---
+/Work/Meeting Notes  [notebook]  bbbbbbbb-1111-1111-1111-111111111111

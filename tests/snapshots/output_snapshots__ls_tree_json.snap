@@ -1,0 +1,5 @@
+---
+source: tests/output_snapshots.rs
+expression: "ls::format_output(&out, OutputFormat::Json)"
+---
+{"uuid":null,"name":"/","type":"folder","children":[{"uuid":"aaaaaaaa-1111-1111-1111-111111111111","name":"Work","type":"folder","children":[{"uuid":"aaaaaaaa-2222-2222-2222-222222222222","name":"Projects","type":"folder","children":[{"uuid":"bbbbbbbb-2222-2222-2222-222222222222","name":"Research Paper","type":"document","file_type":"pdf","page_count":24,"tags":["research"],"children":[]}]},{"uuid":"bbbbbbbb-1111-1111-1111-111111111111","name":"Meeting Notes","type":"document","file_type":"notebook","page_count":12,"tags":["work","meetings"],"children":[]}]},{"uuid":"bbbbbbbb-3333-3333-3333-333333333333","name":"Quick Read","type":"document","file_type":"epub","page_count":300,"pinned":true,"children":[]}]}

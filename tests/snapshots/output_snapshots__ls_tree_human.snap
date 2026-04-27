@@ -1,0 +1,10 @@
+---
+source: tests/output_snapshots.rs
+expression: "ls::format_output(&out, OutputFormat::Human)"
+---
+/
+├── Work/
+│   ├── Projects/
+│   │   └── Research Paper  [pdf]  24p  tags: research
+│   └── Meeting Notes  [notebook]  12p  tags: work, meetings
+└── Quick Read  [epub]  300p  pinned

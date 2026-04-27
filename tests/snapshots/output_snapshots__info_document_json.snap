@@ -1,0 +1,5 @@
+---
+source: tests/output_snapshots.rs
+expression: "info::format_output(&out, OutputFormat::Json)"
+---
+{"uuid":"bbbbbbbb-1111-1111-1111-111111111111","name":"Meeting Notes","path":"/Work/Meeting Notes","type":"document","file_type":"notebook","page_count":12,"parent_uuid":"aaaaaaaa-1111-1111-1111-111111111111","last_modified":"2024-03-16T16:00:00Z","last_opened":null,"tags":["work","meetings"],"metadata":{"deleted":false,"lastModified":1710604800000,"metadatamodified":1710604800000,"parent":"aaaaaaaa-1111-1111-1111-111111111111","pinned":false,"tags":["work","meetings"],"type":"DocumentType","version":1,"visibleName":"Meeting Notes"},"content":{"fileType":"notebook","pageCount":12}}

@@ -1,0 +1,32 @@
+---
+source: tests/output_snapshots.rs
+expression: "info::format_output(&out, OutputFormat::Human)"
+---
+uuid:      bbbbbbbb-1111-1111-1111-111111111111
+path:      /Work/Meeting Notes
+name:      Meeting Notes
+type:      notebook
+file_type: notebook
+tags:      work, meetings
+
+metadata:
+{
+  "deleted": false,
+  "lastModified": 1710604800000,
+  "metadatamodified": 1710604800000,
+  "parent": "aaaaaaaa-1111-1111-1111-111111111111",
+  "pinned": false,
+  "tags": [
+    "work",
+    "meetings"
+  ],
+  "type": "DocumentType",
+  "version": 1,
+  "visibleName": "Meeting Notes"
+}
+
+content:
+{
+  "fileType": "notebook",
+  "pageCount": 12
+}

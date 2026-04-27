@@ -1,0 +1,23 @@
+---
+source: tests/output_snapshots.rs
+expression: "info::format_output(&out, OutputFormat::Human)"
+---
+uuid:      aaaaaaaa-1111-1111-1111-111111111111
+path:      /Work
+name:      Work
+type:      folder
+
+metadata:
+{
+  "deleted": false,
+  "lastModified": 1710518400000,
+  "metadatamodified": 1710518400000,
+  "parent": "",
+  "pinned": false,
+  "type": "CollectionType",
+  "version": 1,
+  "visibleName": "Work"
+}
+
+content:
+null

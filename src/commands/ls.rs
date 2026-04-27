@@ -290,18 +290,27 @@ fn build_tree_children(
 // ---------------------------------------------------------------------------
 
 fn print_output(out: &LsOutput, format: OutputFormat) {
+    println!("{}", format_output(out, format));
+}
+
+/// Render `out` to a string in the requested format. Used by `print_output`
+/// and by snapshot tests.
+///
+/// # Panics
+/// Panics if `out` cannot be serialized as JSON.
+#[must_use]
+pub fn format_output(out: &LsOutput, format: OutputFormat) -> String {
     match (out, format) {
-        (LsOutput::Flat(items), OutputFormat::Json) => output::print_json(items),
-        (LsOutput::Flat(items), OutputFormat::Human) => print_flat_human(items),
-        (LsOutput::Tree(node), OutputFormat::Json) => output::print_json(node),
-        (LsOutput::Tree(node), OutputFormat::Human) => print_tree_human(node),
+        (LsOutput::Flat(items), OutputFormat::Json) => output::render_json(items),
+        (LsOutput::Flat(items), OutputFormat::Human) => format_flat_human(items),
+        (LsOutput::Tree(node), OutputFormat::Json) => output::render_json(node),
+        (LsOutput::Tree(node), OutputFormat::Human) => format_tree_human(node),
     }
 }
 
-fn print_flat_human(items: &[LsItem]) {
+fn format_flat_human(items: &[LsItem]) -> String {
     if items.is_empty() {
-        println!("(empty)");
-        return;
+        return "(empty)".to_string();
     }
     let recursive = items.iter().any(|i| i.depth.is_some());
     let rows: Vec<[String; 4]> = items
@@ -320,7 +329,7 @@ fn print_flat_human(items: &[LsItem]) {
         .collect();
 
     let widths = column_widths(&["TYPE", "NAME", "MODIFIED", ""], &rows);
-    println!(
+    let mut lines = vec![format!(
         "{:<w0$}  {:<w1$}  {:<w2$}",
         "TYPE",
         "NAME",
@@ -328,7 +337,7 @@ fn print_flat_human(items: &[LsItem]) {
         w0 = widths[0],
         w1 = widths[1],
         w2 = widths[2],
-    );
+    )];
     for row in &rows {
         let extras = &row[3];
         let extras_suffix = if extras.is_empty() {
@@ -336,7 +345,7 @@ fn print_flat_human(items: &[LsItem]) {
         } else {
             format!("  {extras}")
         };
-        println!(
+        lines.push(format!(
             "{:<w0$}  {:<w1$}  {:<w2$}{extras_suffix}",
             row[0],
             row[1],
@@ -344,8 +353,9 @@ fn print_flat_human(items: &[LsItem]) {
             w0 = widths[0],
             w1 = widths[1],
             w2 = widths[2],
-        );
+        ));
     }
+    lines.join("\n")
 }
 
 fn flat_item_name(item: &LsItem, recursive: bool) -> String {
@@ -414,24 +424,25 @@ fn column_widths(headers: &[&str; 4], rows: &[[String; 4]]) -> [usize; 4] {
     w
 }
 
-fn print_tree_human(root: &TreeNode) {
-    println!("{}", tree_label(root, true));
-    print_tree_children(&root.children, "");
+fn format_tree_human(root: &TreeNode) -> String {
+    let mut lines = vec![tree_label(root, true)];
+    push_tree_children(&mut lines, &root.children, "");
+    lines.join("\n")
 }
 
-fn print_tree_children(nodes: &[TreeNode], prefix: &str) {
+fn push_tree_children(lines: &mut Vec<String>, nodes: &[TreeNode], prefix: &str) {
     let count = nodes.len();
     for (i, node) in nodes.iter().enumerate() {
         let last = i == count - 1;
         let connector = if last { "└── " } else { "├── " };
-        println!("{prefix}{connector}{}", tree_label(node, false));
+        lines.push(format!("{prefix}{connector}{}", tree_label(node, false)));
         if !node.children.is_empty() {
             let next_prefix = if last {
                 format!("{prefix}    ")
             } else {
                 format!("{prefix}│   ")
             };
-            print_tree_children(&node.children, &next_prefix);
+            push_tree_children(lines, &node.children, &next_prefix);
         }
     }
 }

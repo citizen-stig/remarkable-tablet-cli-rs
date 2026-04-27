@@ -1,0 +1,31 @@
+---
+source: tests/cli.rs
+expression: stdout
+---
+List folder contents
+
+Usage: remarkable-cli ls [OPTIONS] [PATH_OR_UUID]
+
+Arguments:
+  [PATH_OR_UUID]  Path or UUID to list (default: root)
+
+Options:
+      --host <host>          Tablet IP/hostname [auto-discover if omitted]
+  -r, --recursive            List recursively
+      --depth <DEPTH>        Maximum depth for recursive listing
+      --port <port>          SSH port [default: 22]
+      --include-trashed      Include trashed items
+      --user <user>          SSH username [default: root]
+      --password <password>  SSH password (or set `REMARKABLE_PASSWORD` env var) [env: REMARKABLE_PASSWORD=]
+      --sort <SORT>          Sort order [possible values: name, modified, type]
+      --key_file <key_file>  SSH private key path [default: ~/.ssh/id_rsa]
+      --tree                 Display as indented tree (like unix tree command)
+      --format <format>      Output format [default: human] [possible values: human, json]
+      --kind <KIND>          Filter by entry kind [default: all] [possible values: all, documents, folders]
+      --timeout <timeout>    SSH connection timeout in seconds [default: 5]
+      --data_dir <data_dir>  Remote xochitl data directory path [default: /home/root/.local/share/remarkable/xochitl]
+      --no-restart           Skip xochitl restart after mutating operations
+      --verbose              Enable verbose/debug logging to stderr
+      --quiet                Suppress all stderr output
+  -h, --help                 Print help
+  -V, --version              Print version

@@ -1,0 +1,5 @@
+---
+source: tests/output_snapshots.rs
+expression: "ls::format_output(&out, OutputFormat::Json)"
+---
+[{"uuid":"aaaaaaaa-1111-1111-1111-111111111111","name":"Work","path":"/Work","type":"folder","parent_uuid":null,"last_modified":"2024-03-15T16:00:00Z","last_opened":null,"children_count":2},{"uuid":"bbbbbbbb-3333-3333-3333-333333333333","name":"Quick Read","path":"/Quick Read","type":"document","file_type":"epub","page_count":300,"parent_uuid":null,"last_modified":"2024-03-14T07:06:40Z","last_opened":null,"pinned":true,"children_count":null}]

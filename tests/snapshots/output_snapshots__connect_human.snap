@@ -1,0 +1,11 @@
+---
+source: tests/output_snapshots.rs
+expression: "output::format_device_info(&info, OutputFormat::Human)"
+---
+host:             10.11.99.1
+connection_type:  usb
+firmware_version: 20230412102300
+battery_percent:  78%
+disk_total_mb:    6144
+disk_used_mb:     2048
+disk_free_mb:     4096

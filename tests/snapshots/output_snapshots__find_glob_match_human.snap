@@ -1,0 +1,5 @@
+---
+source: tests/output_snapshots.rs
+expression: "find::format_output(&items, OutputFormat::Human)"
+---
+/Work/Projects/Research Paper  [pdf]  bbbbbbbb-2222-2222-2222-222222222222

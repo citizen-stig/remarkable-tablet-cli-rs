@@ -1,0 +1,5 @@
+---
+source: tests/output_snapshots.rs
+expression: "find::format_output(&items, OutputFormat::Json)"
+---
+[{"uuid":"bbbbbbbb-1111-1111-1111-111111111111","name":"Meeting Notes","path":"/Work/Meeting Notes","type":"document","file_type":"notebook","page_count":12,"parent_uuid":"aaaaaaaa-1111-1111-1111-111111111111","last_modified":"2024-03-16T16:00:00Z","last_opened":null,"tags":["work","meetings"]}]

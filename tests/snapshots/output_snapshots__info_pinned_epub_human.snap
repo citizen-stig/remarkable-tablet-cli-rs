@@ -1,0 +1,28 @@
+---
+source: tests/output_snapshots.rs
+expression: "info::format_output(&out, OutputFormat::Human)"
+---
+uuid:      bbbbbbbb-3333-3333-3333-333333333333
+path:      /Quick Read
+name:      Quick Read
+type:      epub
+file_type: epub
+pinned:    true
+
+metadata:
+{
+  "deleted": false,
+  "lastModified": 1710400000000,
+  "metadatamodified": 1710400000000,
+  "parent": "",
+  "pinned": true,
+  "type": "DocumentType",
+  "version": 1,
+  "visibleName": "Quick Read"
+}
+
+content:
+{
+  "fileType": "epub",
+  "pageCount": 300
+}

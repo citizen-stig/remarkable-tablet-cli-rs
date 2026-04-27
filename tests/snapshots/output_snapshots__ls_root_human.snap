@@ -1,0 +1,7 @@
+---
+source: tests/output_snapshots.rs
+expression: "ls::format_output(&out, OutputFormat::Human)"
+---
+TYPE    NAME          MODIFIED           
+folder  Work/         2024-03-15 16:00:00  2 items
+epub    Quick Read *  2024-03-14 07:06:40  300p
