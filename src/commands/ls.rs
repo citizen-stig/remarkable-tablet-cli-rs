@@ -51,7 +51,7 @@ pub struct LsItem {
 
 #[derive(Serialize, Debug)]
 pub struct TreeNode {
-    /// `None` only for the synthetic root node (`/`).
+    /// `None` for virtual nodes such as the synthetic root (`/`) or `trash`.
     pub uuid: Option<Uuid>,
     pub name: String,
     #[serde(rename = "type")]
@@ -133,17 +133,77 @@ fn resolve_target(tree: &DocumentTree, args: &LsArgs) -> anyhow::Result<Target> 
 // ---------------------------------------------------------------------------
 
 fn build_flat(tree: &DocumentTree, target: &Target, args: &LsArgs) -> Vec<LsItem> {
-    let entries = tree.list_children(
-        &target.parent,
-        args.include_trashed,
-        args.documents_only,
-        args.folders_only,
-        args.sort.as_ref(),
-    );
-    entries
+    let mut items: Vec<_> = tree
+        .list_children(
+            &target.parent,
+            args.include_trashed,
+            args.documents_only,
+            args.folders_only,
+            args.sort.as_ref(),
+        )
         .into_iter()
         .map(|e| to_ls_item(tree, e, None))
-        .collect()
+        .collect();
+
+    if args.include_trashed && matches!(target.parent, Parent::Root) {
+        items.extend(
+            tree.list_children(
+                &Parent::Trash,
+                true,
+                args.documents_only,
+                args.folders_only,
+                args.sort.as_ref(),
+            )
+            .into_iter()
+            .map(|e| to_ls_item(tree, e, None)),
+        );
+    }
+
+    items
+}
+
+fn to_ls_item(tree: &DocumentTree, e: &DocumentEntry, depth: Option<u32>) -> LsItem {
+    let parent_uuid = match &e.parent {
+        Parent::Folder(u) => Some(*u),
+        Parent::Root | Parent::Trash => None,
+    };
+    let path = path_resolver::resolve_uuid_to_path(tree, &e.uuid)
+        .unwrap_or_else(|_| format!("/{}", e.visible_name));
+    let children_count = if e.is_folder() {
+        Some(tree.children_count(&Parent::Folder(e.uuid)))
+    } else {
+        None
+    };
+    LsItem {
+        uuid: e.uuid,
+        name: e.visible_name.clone(),
+        kind: e.item_type.into(),
+        file_type: e.file_type,
+        parent_uuid,
+        path,
+        modified: e.last_modified,
+        last_opened: e.last_opened,
+        tags: e.tags.clone(),
+        pinned: e.pinned,
+        deleted: e.is_trashed(),
+        children_count,
+        page_count: e.page_count,
+        depth,
+    }
+}
+
+fn virtual_tree_folder(name: &str, children: Vec<TreeNode>) -> TreeNode {
+    TreeNode {
+        uuid: None,
+        name: name.to_string(),
+        kind: ItemKind::Folder,
+        file_type: None,
+        last_opened: None,
+        tags: Vec::new(),
+        pinned: false,
+        page_count: None,
+        children,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -182,36 +242,6 @@ fn build_recursive(
         .collect())
 }
 
-fn to_ls_item(tree: &DocumentTree, e: &DocumentEntry, depth: Option<u32>) -> LsItem {
-    let parent_uuid = match &e.parent {
-        Parent::Folder(u) => Some(*u),
-        Parent::Root | Parent::Trash => None,
-    };
-    let path = path_resolver::resolve_uuid_to_path(tree, &e.uuid)
-        .unwrap_or_else(|_| format!("/{}", e.visible_name));
-    let children_count = if e.is_folder() {
-        Some(tree.children_count(&Parent::Folder(e.uuid)))
-    } else {
-        None
-    };
-    LsItem {
-        uuid: e.uuid,
-        name: e.visible_name.clone(),
-        kind: e.item_type.into(),
-        file_type: e.file_type,
-        parent_uuid,
-        path,
-        modified: e.last_modified,
-        last_opened: e.last_opened,
-        tags: e.tags.clone(),
-        pinned: e.pinned,
-        deleted: e.is_trashed(),
-        children_count,
-        page_count: e.page_count,
-        depth,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tree listing
 // ---------------------------------------------------------------------------
@@ -233,10 +263,11 @@ fn build_tree_node(tree: &DocumentTree, target: &Target, args: &LsArgs) -> TreeN
     };
 
     let mut children = build_tree_children(tree, &target.parent, args, 0);
-    // From a root listing with --include-trashed, splice the Trash subtree
-    // in as well so the returned tree is self-contained.
     if args.include_trashed && matches!(target.parent, Parent::Root) {
-        children.extend(build_tree_children(tree, &Parent::Trash, args, 0));
+        let trash_children = build_tree_children(tree, &Parent::Trash, args, 0);
+        if !trash_children.is_empty() {
+            children.push(virtual_tree_folder("trash", trash_children));
+        }
     }
 
     TreeNode {
@@ -350,17 +381,7 @@ fn print_flat_human(items: &[LsItem]) {
         .iter()
         .map(|i| {
             let type_label = type_label(i.kind, i.file_type);
-            let name = if recursive {
-                i.path.clone()
-            } else if i.kind == ItemKind::Folder {
-                format!("{}/", i.name)
-            } else {
-                let mut n = i.name.clone();
-                if i.pinned {
-                    n.push_str(" *");
-                }
-                n
-            };
+            let name = flat_item_name(i, recursive);
             let modified = i.modified.format("%Y-%m-%d %H:%M:%S").to_string();
             let extras = format_extras(i);
             [type_label, name, modified, extras]
@@ -400,6 +421,30 @@ fn print_flat_human(items: &[LsItem]) {
                 w2 = widths[2],
             );
         }
+    }
+}
+
+fn flat_item_name(item: &LsItem, recursive: bool) -> String {
+    if recursive {
+        return item.path.clone();
+    }
+    if item.deleted {
+        let mut name = item.path.clone();
+        if item.kind == ItemKind::Folder {
+            name.push('/');
+        } else if item.pinned {
+            name.push_str(" *");
+        }
+        return name;
+    }
+    if item.kind == ItemKind::Folder {
+        format!("{}/", item.name)
+    } else {
+        let mut name = item.name.clone();
+        if item.pinned {
+            name.push_str(" *");
+        }
+        name
     }
 }
 

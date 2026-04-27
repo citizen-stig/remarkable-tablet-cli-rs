@@ -215,6 +215,20 @@ async fn ls_include_trashed_recursive_surfaces_old_draft() {
 }
 
 #[tokio::test]
+async fn ls_include_trashed_flat_root_surfaces_old_draft_under_trash_path() {
+    let conn = setup_fake_tablet();
+    let tree = build_tree(&conn).await;
+    let mut args = ls_args();
+    args.include_trashed = true;
+    let items = flat(ls::run_with_tree(&tree, &args).unwrap());
+    let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, vec!["Work", "Quick Read", "Old Draft"]);
+    let trashed = items.iter().find(|i| i.name == "Old Draft").unwrap();
+    assert!(trashed.deleted);
+    assert_eq!(trashed.path, "/trash/Old Draft");
+}
+
+#[tokio::test]
 async fn ls_sort_modified_descending() {
     let conn = setup_fake_tablet();
     let tree = build_tree(&conn).await;
@@ -283,6 +297,22 @@ async fn ls_tree_mode_builds_nested_structure() {
     let projects = work.children.iter().find(|c| c.name == "Projects").unwrap();
     let proj_kids: Vec<_> = projects.children.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(proj_kids, vec!["Research Paper"]);
+}
+
+#[tokio::test]
+async fn ls_tree_mode_include_trashed_nests_under_virtual_trash() {
+    let conn = setup_fake_tablet();
+    let tree = build_tree(&conn).await;
+    let mut args = ls_args();
+    args.tree = true;
+    args.include_trashed = true;
+    let root = tree_node(ls::run_with_tree(&tree, &args).unwrap());
+    let top: Vec<_> = root.children.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(top, vec!["Work", "Quick Read", "trash"]);
+    let trash = root.children.iter().find(|c| c.name == "trash").unwrap();
+    assert!(trash.uuid.is_none());
+    let trash_kids: Vec<_> = trash.children.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(trash_kids, vec!["Old Draft"]);
 }
 
 #[tokio::test]
@@ -429,12 +459,34 @@ async fn info_missing_target_is_not_found() {
 
 #[tokio::test]
 async fn info_document_without_content_yields_null_content() {
-    let conn = setup_fake_tablet();
-    // Wipe the .content file so the read fails.
-    let path = format!("{DATA_DIR}/{DOC_PAPER}.content");
-    conn.set_read_error(&path, "missing");
+    let conn = FakeConnection::new();
+    conn.mkdir(DATA_DIR);
+    conn.set_file(
+        &format!("{DATA_DIR}/{DOC_PAPER}.metadata"),
+        r#"{"visibleName":"Research Paper","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710700000000,"metadatamodified":1710700000000,"version":1,"tags":["research"]}"#,
+    );
     let tree = build_tree(&conn).await;
     let out = info::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &InfoArgs {
+            path_or_uuid: "/Research Paper".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(out.content.is_none());
+    assert_eq!(out.metadata["visibleName"], "Research Paper");
+}
+
+#[tokio::test]
+async fn info_document_content_read_failure_propagates() {
+    let conn = setup_fake_tablet();
+    let tree = build_tree(&conn).await;
+    let path = format!("{DATA_DIR}/{DOC_PAPER}.content");
+    conn.set_read_error(&path, "permission denied");
+    let err = info::run_with_conn(
         &conn,
         DATA_DIR,
         &tree,
@@ -443,9 +495,8 @@ async fn info_document_without_content_yields_null_content() {
         },
     )
     .await
-    .unwrap();
-    assert!(out.content.is_none());
-    assert_eq!(out.metadata["visibleName"], "Research Paper");
+    .unwrap_err();
+    assert!(err.to_string().contains("permission denied"));
 }
 
 #[tokio::test]

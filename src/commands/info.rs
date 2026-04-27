@@ -71,9 +71,11 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let content = if entry.is_document() {
         let content_path = format!("{data_dir}/{}.content", entry.uuid);
-        match conn.read_file(&content_path).await {
-            Ok(bytes) => Some(serde_json::from_slice::<serde_json::Value>(&bytes)?),
-            Err(_) => None,
+        if conn.file_exists(&content_path).await? {
+            let bytes = conn.read_file(&content_path).await?;
+            Some(serde_json::from_slice::<serde_json::Value>(&bytes)?)
+        } else {
+            None
         }
     } else {
         None
