@@ -321,6 +321,8 @@ async fn load_diagnostics_records_timing() {
     // FakeConnection serves files from a tempdir, so timing is non-zero but small.
     assert!(diag.list_dir_elapsed.as_nanos() > 0);
     assert!(diag.read_elapsed.as_nanos() > 0);
+    assert!(diag.dir_entry_count > 0);
+    assert!(diag.uuid_metadata_count > 0);
 }
 
 #[tokio::test]

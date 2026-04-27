@@ -35,7 +35,12 @@ impl client::Handler for ClientHandler {
 
 pub struct SshConnection {
     handle: Mutex<Handle<ClientHandler>>,
-    sftp: Mutex<SftpSession>,
+    /// `russh-sftp`'s `SftpSession` multiplexes requests internally via SFTP
+    /// request IDs and exposes `&self` methods, so concurrent `read`/`list_dir`
+    /// calls are safe and allow many in-flight requests on a single channel.
+    /// We keep no mutex here — that's the whole point of dropping the lock,
+    /// since holding one across `await` was serializing every SFTP round-trip.
+    sftp: SftpSession,
 }
 
 impl SshConnection {
@@ -79,7 +84,7 @@ impl SshConnection {
 
         Ok(Self {
             handle: Mutex::new(handle),
-            sftp: Mutex::new(sftp),
+            sftp,
         })
     }
 
@@ -186,22 +191,22 @@ fn verbose(opts: &ConnectOptions, msg: &str) {
 
 impl TabletConnection for SshConnection {
     async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>> {
-        let sftp = self.sftp.lock().await;
-        sftp.read(path)
+        self.sftp
+            .read(path)
             .await
             .with_context(|| format!("sftp read {path}"))
     }
 
     async fn write_file(&self, path: &str, data: &[u8]) -> anyhow::Result<()> {
-        let sftp = self.sftp.lock().await;
-        sftp.write(path, data)
+        self.sftp
+            .write(path, data)
             .await
             .with_context(|| format!("sftp write {path}"))
     }
 
     async fn list_dir(&self, path: &str) -> anyhow::Result<Vec<String>> {
-        let sftp = self.sftp.lock().await;
-        let dir = sftp
+        let dir = self
+            .sftp
             .read_dir(path)
             .await
             .with_context(|| format!("sftp read_dir {path}"))?;
@@ -216,8 +221,8 @@ impl TabletConnection for SshConnection {
     }
 
     async fn remove_file(&self, path: &str) -> anyhow::Result<()> {
-        let sftp = self.sftp.lock().await;
-        sftp.remove_file(path)
+        self.sftp
+            .remove_file(path)
             .await
             .with_context(|| format!("sftp remove_file {path}"))
     }
@@ -245,8 +250,8 @@ impl TabletConnection for SshConnection {
     }
 
     async fn file_exists(&self, path: &str) -> anyhow::Result<bool> {
-        let sftp = self.sftp.lock().await;
-        sftp.try_exists(path)
+        self.sftp
+            .try_exists(path)
             .await
             .map_err(|e| anyhow::Error::new(e).context(format!("sftp stat {path}")))
     }

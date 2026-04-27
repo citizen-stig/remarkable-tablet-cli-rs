@@ -1,10 +1,18 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::Serialize;
 
 use crate::connection::TabletConnection;
 use crate::metadata::{self, DocumentEntry, ItemType};
+
+/// Maximum concurrent SFTP read requests during metadata loading.
+///
+/// SFTP multiplexes by request ID, so many can be in-flight on a single
+/// session. 16 keeps the OpenSSH server's window saturated without
+/// overwhelming a USB-attached tablet.
+const READ_CONCURRENCY: usize = 16;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceInfo {
@@ -167,55 +175,80 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
         .collect();
     diag.uuid_metadata_count = uuids.len();
 
-    let mut result = Vec::with_capacity(uuids.len());
-
     let read_start = Instant::now();
-    for uuid in uuids {
-        let meta_path = format!("{data_dir}/{uuid}.metadata");
-        let meta_bytes = conn
-            .read_file(&meta_path)
-            .await
-            .with_context(|| format!("read {meta_path}"))?;
-        let raw = match metadata::parse_metadata(&meta_bytes) {
-            Ok(m) => m,
-            Err(e) => {
-                diag.parse_failures
-                    .push((format!("{uuid}.metadata"), e.to_string()));
-                continue;
-            }
-        };
-
-        let (file_type, page_count) = if raw.item_type == ItemType::Document {
-            let content_path = format!("{data_dir}/{uuid}.content");
-            match conn.read_file(&content_path).await {
-                Ok(b) => match metadata::parse_content(&b) {
-                    Ok(c) => (Some(c.file_type), c.effective_page_count()),
-                    Err(_) => (None, None),
-                },
-                Err(_) => (None, None),
-            }
-        } else {
-            (None, None)
-        };
-
-        result.push(DocumentEntry {
-            uuid,
-            visible_name: raw.visible_name,
-            item_type: raw.item_type,
-            parent: raw.parent,
-            deleted: raw.deleted,
-            pinned: raw.pinned,
-            last_modified: raw.last_modified,
-            version: raw.version,
-            tags: raw.tags,
-            last_opened: raw.last_opened,
-            file_type,
-            page_count,
-        });
-    }
+    // Issue many `read_file` calls concurrently. Each per-uuid future returns
+    // either a parsed entry or a parse-failure record; I/O errors bubble out
+    // and abort the whole load via `try_collect`.
+    let outcomes: Vec<LoadOutcome> = stream::iter(uuids)
+        .map(|uuid| load_one(conn, data_dir, uuid))
+        .buffer_unordered(READ_CONCURRENCY)
+        .try_collect()
+        .await?;
     diag.read_elapsed = read_start.elapsed();
 
+    let mut result = Vec::with_capacity(outcomes.len());
+    for outcome in outcomes {
+        match outcome {
+            LoadOutcome::Entry(e) => result.push(e),
+            LoadOutcome::ParseFail(file, err) => diag.parse_failures.push((file, err)),
+        }
+    }
+
     Ok((result, diag))
+}
+
+enum LoadOutcome {
+    Entry(DocumentEntry),
+    ParseFail(String, String),
+}
+
+async fn load_one<C: TabletConnection>(
+    conn: &C,
+    data_dir: &str,
+    uuid: uuid::Uuid,
+) -> anyhow::Result<LoadOutcome> {
+    let meta_path = format!("{data_dir}/{uuid}.metadata");
+    let meta_bytes = conn
+        .read_file(&meta_path)
+        .await
+        .with_context(|| format!("read {meta_path}"))?;
+    let raw = match metadata::parse_metadata(&meta_bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            return Ok(LoadOutcome::ParseFail(
+                format!("{uuid}.metadata"),
+                e.to_string(),
+            ));
+        }
+    };
+
+    let (file_type, page_count) = if raw.item_type == ItemType::Document {
+        let content_path = format!("{data_dir}/{uuid}.content");
+        match conn.read_file(&content_path).await {
+            Ok(b) => match metadata::parse_content(&b) {
+                Ok(c) => (Some(c.file_type), c.effective_page_count()),
+                Err(_) => (None, None),
+            },
+            Err(_) => (None, None),
+        }
+    } else {
+        (None, None)
+    };
+
+    Ok(LoadOutcome::Entry(DocumentEntry {
+        uuid,
+        visible_name: raw.visible_name,
+        item_type: raw.item_type,
+        parent: raw.parent,
+        deleted: raw.deleted,
+        pinned: raw.pinned,
+        last_modified: raw.last_modified,
+        version: raw.version,
+        tags: raw.tags,
+        last_opened: raw.last_opened,
+        file_type,
+        page_count,
+    }))
 }
 
 fn shell_single_quote(s: &str) -> String {

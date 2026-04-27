@@ -1802,6 +1802,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "futures",
  "glob",
  "russh",
  "russh-sftp",
