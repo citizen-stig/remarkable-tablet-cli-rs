@@ -63,7 +63,7 @@ pub async fn run_with_conn<C: TabletConnection>(
         Resolved::Entry(e) => e,
     };
 
-    let path = path_resolver::resolve_uuid_to_path(tree, &entry.uuid)?;
+    let path = common::entry_path(tree, entry);
     let metadata_path = format!("{data_dir}/{}.metadata", entry.uuid);
     let metadata_bytes = conn.read_file(&metadata_path).await?;
     let metadata: serde_json::Value = serde_json::from_slice(&metadata_bytes)?;

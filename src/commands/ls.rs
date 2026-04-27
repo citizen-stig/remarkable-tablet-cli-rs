@@ -1,14 +1,17 @@
+use std::collections::HashSet;
+
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::cli::{GlobalOptions, LsArgs};
+use crate::cli::{GlobalOptions, LsArgs, SortField};
 use crate::commands::common::{self, ItemKind};
 use crate::error::{CliError, Result};
 use crate::metadata::{DocumentEntry, FileType, Parent};
 use crate::output::{self, OutputFormat};
 use crate::path_resolver::{self, Resolved};
-use crate::tree::{self, DocumentTree, ListFilter};
+use crate::tree::{self, DocumentTree, EntryKindFilter, ListFilter};
 
 #[derive(Serialize, Debug)]
 pub struct LsItem {
@@ -76,14 +79,18 @@ async fn run(global: &GlobalOptions, args: &LsArgs) -> anyhow::Result<()> {
 
 pub fn run_with_tree(tree: &DocumentTree, args: &LsArgs) -> anyhow::Result<LsOutput> {
     let target = resolve_target(tree, args)?;
+    let filter = filter_from_args(args);
 
     if args.tree {
-        let root = build_tree_node(tree, &target, args);
-        Ok(LsOutput::Tree(root))
+        Ok(LsOutput::Tree(build_tree_node(
+            tree, &target, filter, args.depth,
+        )?))
     } else if args.recursive || args.depth.is_some() {
-        Ok(LsOutput::Flat(build_recursive(tree, &target, args)?))
+        Ok(LsOutput::Flat(build_recursive(
+            tree, &target, filter, args.depth,
+        )?))
     } else {
-        Ok(LsOutput::Flat(build_flat(tree, &target, args)))
+        Ok(LsOutput::Flat(build_flat(tree, &target, filter)))
     }
 }
 
@@ -114,35 +121,39 @@ fn resolve_target(tree: &DocumentTree, args: &LsArgs) -> anyhow::Result<Target> 
 // Flat listing (direct children)
 // ---------------------------------------------------------------------------
 
-fn build_flat(tree: &DocumentTree, target: &Target, args: &LsArgs) -> Vec<LsItem> {
-    let filter = filter_from_args(args);
-    let mut items: Vec<_> = tree
-        .list_children(&target.parent, filter)
+fn build_flat(tree: &DocumentTree, target: &Target, filter: ListFilter<'_>) -> Vec<LsItem> {
+    let entries = if filter.includes_trashed() && matches!(target.parent, Parent::Root) {
+        filter_flat_entries(
+            merged_root_and_trash_children(tree, filter.sort_field()),
+            filter,
+        )
+    } else {
+        tree.list_children(&target.parent, filter)
+    };
+
+    entries
         .into_iter()
         .map(|e| to_ls_item(tree, e, None))
-        .collect();
-
-    if args.include_trashed && matches!(target.parent, Parent::Root) {
-        let trash_filter = ListFilter {
-            include_trashed: true,
-            ..filter
-        };
-        items.extend(
-            tree.list_children(&Parent::Trash, trash_filter)
-                .into_iter()
-                .map(|e| to_ls_item(tree, e, None)),
-        );
-    }
-
-    items
+        .collect()
 }
 
 fn filter_from_args(args: &LsArgs) -> ListFilter<'_> {
-    ListFilter {
-        include_trashed: args.include_trashed,
-        documents_only: args.documents_only,
-        folders_only: args.folders_only,
-        sort: args.sort.as_ref(),
+    let kind = match (args.documents_only, args.folders_only) {
+        (false, false) => EntryKindFilter::All,
+        (true, false) => EntryKindFilter::DocumentsOnly,
+        (false, true) => EntryKindFilter::FoldersOnly,
+        (true, true) => unreachable!("clap enforces documents_only/folders_only conflicts"),
+    };
+
+    let filter = ListFilter::new(kind);
+    let filter = if args.include_trashed {
+        filter.include_trashed()
+    } else {
+        filter
+    };
+    match args.sort.as_ref() {
+        Some(sort) => filter.with_sort(sort),
+        None => filter,
     }
 }
 
@@ -184,6 +195,81 @@ fn virtual_tree_folder(name: &str, children: Vec<TreeNode>) -> TreeNode {
     }
 }
 
+fn merged_root_and_trash_children<'a>(
+    tree: &'a DocumentTree,
+    sort: Option<&SortField>,
+) -> Vec<&'a DocumentEntry> {
+    let mut children = tree.child_entries(&Parent::Root);
+    children.extend(tree.child_entries(&Parent::Trash));
+    tree::sort_entries(&mut children, sort);
+    children
+}
+
+fn filter_flat_entries<'a>(
+    mut entries: Vec<&'a DocumentEntry>,
+    filter: ListFilter<'_>,
+) -> Vec<&'a DocumentEntry> {
+    entries.retain(|entry| filter.matches(entry));
+    entries
+}
+
+fn visible_children<'a>(
+    tree: &'a DocumentTree,
+    parent: &Parent,
+    filter: ListFilter<'_>,
+) -> Vec<&'a DocumentEntry> {
+    let mut children = tree.child_entries(parent);
+    if !filter.includes_trashed() {
+        children.retain(|entry| !entry.is_trashed());
+    }
+    tree::sort_entries(&mut children, filter.sort_field());
+    children
+}
+
+fn cycle_error(uuid: Uuid) -> anyhow::Error {
+    anyhow!("cycle detected while traversing folder UUID {}", uuid)
+}
+
+fn collect_recursive_items<'a>(
+    tree: &'a DocumentTree,
+    entries: Vec<&'a DocumentEntry>,
+    current_depth: u32,
+    max_depth: Option<u32>,
+    filter: ListFilter<'_>,
+    ancestors: &mut HashSet<Uuid>,
+    result: &mut Vec<(u32, &'a DocumentEntry)>,
+) -> anyhow::Result<()> {
+    if let Some(max) = max_depth
+        && current_depth >= max
+    {
+        return Ok(());
+    }
+
+    for entry in entries {
+        if filter.matches(entry) {
+            result.push((current_depth, entry));
+        }
+        if entry.is_folder() {
+            if !ancestors.insert(entry.uuid) {
+                return Err(cycle_error(entry.uuid));
+            }
+            let children = visible_children(tree, &Parent::Folder(entry.uuid), filter);
+            collect_recursive_items(
+                tree,
+                children,
+                current_depth + 1,
+                max_depth,
+                filter,
+                ancestors,
+                result,
+            )?;
+            ancestors.remove(&entry.uuid);
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Flat recursive listing
 // ---------------------------------------------------------------------------
@@ -191,21 +277,28 @@ fn virtual_tree_folder(name: &str, children: Vec<TreeNode>) -> TreeNode {
 fn build_recursive(
     tree: &DocumentTree,
     target: &Target,
-    args: &LsArgs,
+    filter: ListFilter<'_>,
+    depth: Option<u32>,
 ) -> anyhow::Result<Vec<LsItem>> {
-    let filter = filter_from_args(args);
-    let mut pairs = tree.list_recursive(&target.parent, args.depth, filter)?;
-    // Trashed items live under `Parent::Trash`, which is not a descendant of
-    // `Parent::Root`. Walk the trash subtree explicitly when the user asked
-    // for it from a root listing.
-    if args.include_trashed && matches!(target.parent, Parent::Root) {
-        let trash_filter = ListFilter {
-            include_trashed: true,
-            ..filter
-        };
-        pairs.extend(tree.list_recursive(&Parent::Trash, args.depth, trash_filter)?);
+    if filter.includes_trashed() && matches!(target.parent, Parent::Root) {
+        let mut pairs = Vec::new();
+        let mut ancestors = HashSet::new();
+        collect_recursive_items(
+            tree,
+            merged_root_and_trash_children(tree, filter.sort_field()),
+            0,
+            depth,
+            filter,
+            &mut ancestors,
+            &mut pairs,
+        )?;
+        return Ok(pairs
+            .into_iter()
+            .map(|(depth, e)| to_ls_item(tree, e, Some(depth)))
+            .collect());
     }
-    Ok(pairs
+    Ok(tree
+        .list_recursive(&target.parent, depth, filter)?
         .into_iter()
         .map(|(depth, e)| to_ls_item(tree, e, Some(depth)))
         .collect())
@@ -215,7 +308,12 @@ fn build_recursive(
 // Tree listing
 // ---------------------------------------------------------------------------
 
-fn build_tree_node(tree: &DocumentTree, target: &Target, args: &LsArgs) -> TreeNode {
+fn build_tree_node(
+    tree: &DocumentTree,
+    target: &Target,
+    filter: ListFilter<'_>,
+    depth: Option<u32>,
+) -> anyhow::Result<TreeNode> {
     let (uuid, kind, file_type, last_opened, tags, pinned) = match &target.parent {
         Parent::Folder(u) => {
             let entry = tree.get(u).expect("target folder exists in tree");
@@ -231,15 +329,20 @@ fn build_tree_node(tree: &DocumentTree, target: &Target, args: &LsArgs) -> TreeN
         _ => (None, ItemKind::Folder, None, None, Vec::new(), false),
     };
 
-    let mut children = build_tree_children(tree, &target.parent, args, 0);
-    if args.include_trashed && matches!(target.parent, Parent::Root) {
-        let trash_children = build_tree_children(tree, &Parent::Trash, args, 0);
+    let mut ancestors = HashSet::new();
+    if let Parent::Folder(uuid) = target.parent {
+        ancestors.insert(uuid);
+    }
+    let mut children = build_tree_children(tree, &target.parent, filter, depth, 0, &mut ancestors)?;
+    if filter.includes_trashed() && matches!(target.parent, Parent::Root) {
+        let trash_children =
+            build_tree_children(tree, &Parent::Trash, filter, depth, 0, &mut ancestors)?;
         if !trash_children.is_empty() {
             children.push(virtual_tree_folder("trash", trash_children));
         }
     }
 
-    TreeNode {
+    Ok(TreeNode {
         uuid,
         name: target.name.clone(),
         kind,
@@ -249,45 +352,56 @@ fn build_tree_node(tree: &DocumentTree, target: &Target, args: &LsArgs) -> TreeN
         pinned,
         page_count: None,
         children,
-    }
+    })
 }
 
 fn build_tree_children(
     tree: &DocumentTree,
     parent: &Parent,
-    args: &LsArgs,
+    filter: ListFilter<'_>,
+    max_depth: Option<u32>,
     current_depth: u32,
-) -> Vec<TreeNode> {
-    if let Some(max) = args.depth
+    ancestors: &mut HashSet<Uuid>,
+) -> anyhow::Result<Vec<TreeNode>> {
+    if let Some(max) = max_depth
         && current_depth >= max
     {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let mut children = tree.child_entries(parent);
-    children.retain(|e| args.include_trashed || !e.is_trashed());
-    if args.folders_only {
-        children.retain(|e| e.is_folder());
-    }
-    tree::sort_entries(&mut children, args.sort.as_ref());
+    let mut children = visible_children(tree, parent, filter);
+    children.retain(|entry| filter.matches(entry) || entry.is_folder());
 
     // Recurse first, then prune empty folders bottom-up under `--documents-only`.
     // This collapses what was an O(n²) pre-filter (folder_has_descendants) into
     // a single tree walk.
     children
         .into_iter()
-        .filter_map(|e| {
+        .map(|e| {
             let nested = if e.is_folder() {
-                build_tree_children(tree, &Parent::Folder(e.uuid), args, current_depth + 1)
+                if !ancestors.insert(e.uuid) {
+                    return Err(cycle_error(e.uuid));
+                }
+                let nested = build_tree_children(
+                    tree,
+                    &Parent::Folder(e.uuid),
+                    filter,
+                    max_depth,
+                    current_depth + 1,
+                    ancestors,
+                )?;
+                ancestors.remove(&e.uuid);
+                nested
             } else {
                 Vec::new()
             };
-            if args.documents_only {
-                let keep = e.is_document() || (e.is_folder() && !nested.is_empty());
-                if !keep {
-                    return None;
+            if !filter.matches(e) {
+                if e.is_folder() && !nested.is_empty() {
+                    // Keep ancestor folders in tree mode when documents are selected.
+                } else {
+                    return Ok(None);
                 }
             }
-            Some(TreeNode {
+            Ok(Some(TreeNode {
                 uuid: Some(e.uuid),
                 name: e.visible_name.clone(),
                 kind: e.item_type.into(),
@@ -297,8 +411,9 @@ fn build_tree_children(
                 pinned: e.pinned,
                 page_count: e.page_count,
                 children: nested,
-            })
+            }))
         })
+        .filter_map(|node| node.transpose())
         .collect()
 }
 

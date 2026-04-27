@@ -1,8 +1,9 @@
+use chrono::{TimeZone, Utc};
 use remarkable_tablet_cli_rs::cli::{FindArgs, FindTypeFilter, InfoArgs, LsArgs, SortField};
 use remarkable_tablet_cli_rs::commands::{common, find, info, ls};
 use remarkable_tablet_cli_rs::connection::FakeConnection;
 use remarkable_tablet_cli_rs::error::CliError;
-use remarkable_tablet_cli_rs::metadata::FileType;
+use remarkable_tablet_cli_rs::metadata::{DocumentEntry, FileType, ItemType, Parent};
 use remarkable_tablet_cli_rs::tablet::load_all_metadata;
 use remarkable_tablet_cli_rs::tree::DocumentTree;
 use uuid::Uuid;
@@ -106,6 +107,30 @@ fn tree_node(out: ls::LsOutput) -> ls::TreeNode {
     match out {
         ls::LsOutput::Tree(n) => n,
         ls::LsOutput::Flat(_) => panic!("expected tree output"),
+    }
+}
+
+fn make_entry(
+    uuid: &str,
+    name: &str,
+    item_type: ItemType,
+    parent: Parent,
+    file_type: Option<FileType>,
+) -> DocumentEntry {
+    let deleted = parent == Parent::Trash;
+    DocumentEntry {
+        uuid: Uuid::parse_str(uuid).unwrap(),
+        visible_name: name.to_string(),
+        item_type,
+        parent,
+        deleted,
+        pinned: false,
+        last_modified: Utc.timestamp_millis_opt(1710000000000).unwrap(),
+        version: 1,
+        tags: vec![],
+        last_opened: None,
+        file_type,
+        page_count: None,
     }
 }
 
@@ -215,6 +240,32 @@ async fn ls_include_trashed_recursive_surfaces_old_draft() {
 }
 
 #[tokio::test]
+async fn ls_include_trashed_recursive_name_sort_merges_trash_into_root_order() {
+    let conn = setup_fake_tablet();
+    let tree = build_tree(&conn).await;
+    let mut args = ls_args();
+    args.recursive = true;
+    args.include_trashed = true;
+    args.sort = Some(SortField::Name);
+    let items = flat(ls::run_with_tree(&tree, &args).unwrap());
+    let pairs: Vec<_> = items
+        .iter()
+        .map(|i| (i.depth.unwrap(), i.name.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            (0, "Work"),
+            (1, "Projects"),
+            (2, "Research Paper"),
+            (1, "Meeting Notes"),
+            (0, "Old Draft"),
+            (0, "Quick Read"),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn ls_include_trashed_flat_root_surfaces_old_draft_under_trash_path() {
     let conn = setup_fake_tablet();
     let tree = build_tree(&conn).await;
@@ -222,7 +273,7 @@ async fn ls_include_trashed_flat_root_surfaces_old_draft_under_trash_path() {
     args.include_trashed = true;
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
     let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
-    assert_eq!(names, vec!["Work", "Quick Read", "Old Draft"]);
+    assert_eq!(names, vec!["Work", "Old Draft", "Quick Read"]);
     let trashed = items.iter().find(|i| i.name == "Old Draft").unwrap();
     assert!(trashed.deleted);
     assert_eq!(trashed.path, "/trash/Old Draft");
@@ -367,6 +418,23 @@ async fn ls_tree_subfolder_uses_entry_as_root() {
     assert_eq!(root.uuid, Some(Uuid::parse_str(FOLDER_WORK).unwrap()));
 }
 
+#[tokio::test]
+async fn ls_tree_mode_errors_on_folder_cycle() {
+    let folder_uuid = Uuid::parse_str(FOLDER_WORK).unwrap();
+    let tree = DocumentTree::build(vec![make_entry(
+        FOLDER_WORK,
+        "Loop",
+        ItemType::Collection,
+        Parent::Folder(folder_uuid),
+        None,
+    )]);
+    let mut args = ls_args();
+    args.tree = true;
+    args.path_or_uuid = Some(FOLDER_WORK.into());
+    let err = ls::run_with_tree(&tree, &args).unwrap_err();
+    assert!(err.to_string().contains("cycle detected"));
+}
+
 // ---------------------------------------------------------------------------
 // info
 // ---------------------------------------------------------------------------
@@ -419,6 +487,32 @@ async fn info_uuid_matches_path() {
     .unwrap();
     assert_eq!(by_path.uuid, by_uuid.uuid);
     assert_eq!(by_path.path, by_uuid.path);
+}
+
+#[tokio::test]
+async fn info_orphan_uuid_uses_fallback_path() {
+    let conn = FakeConnection::new();
+    conn.mkdir(DATA_DIR);
+    let orphan_parent = "dddddddd-1111-1111-1111-111111111111";
+    conn.set_file(
+        &format!("{DATA_DIR}/{DOC_PAPER}.metadata"),
+        format!(
+            r#"{{"visibleName":"Orphaned","type":"DocumentType","parent":"{orphan_parent}","deleted":false,"pinned":false,"lastModified":1710700000000,"metadatamodified":1710700000000,"version":1}}"#
+        ),
+    );
+    let tree = build_tree(&conn).await;
+    let out = info::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &InfoArgs {
+            path_or_uuid: DOC_PAPER.into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.uuid, Uuid::parse_str(DOC_PAPER).unwrap());
+    assert_eq!(out.path, "/Orphaned");
 }
 
 #[tokio::test]

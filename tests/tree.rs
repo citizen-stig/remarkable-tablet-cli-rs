@@ -97,13 +97,7 @@ async fn full_pipeline_load_build_resolve() {
     assert_eq!(project_children[0].file_type, Some(FileType::Pdf));
 
     // Trash has: Old Draft
-    let trash = tree.list_children(
-        &Parent::Trash,
-        ListFilter {
-            include_trashed: true,
-            ..Default::default()
-        },
-    );
+    let trash = tree.list_children(&Parent::Trash, ListFilter::all().include_trashed());
     assert_eq!(trash.len(), 1);
     assert_eq!(trash[0].visible_name, "Old Draft");
 }
