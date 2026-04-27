@@ -244,7 +244,7 @@ pub fn sort_entries(entries: &mut [&DocumentEntry], sort: Option<&SortField>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{FileType, ItemType};
+    use crate::metadata::{FileType, ItemKind, ItemType};
     use chrono::{TimeZone, Utc};
 
     fn make_entry(
@@ -255,10 +255,21 @@ mod tests {
         file_type: Option<FileType>,
     ) -> DocumentEntry {
         let deleted = parent == Parent::Trash;
+        let kind = match (item_type, file_type) {
+            (ItemType::Collection, _) => ItemKind::Folder,
+            (ItemType::Template, _) => ItemKind::Template,
+            (ItemType::Document, Some(file_type)) => ItemKind::Document {
+                file_type,
+                page_count: None,
+            },
+            (ItemType::Document, None) => {
+                unreachable!("test helper requires Some(file_type) for documents")
+            }
+        };
         DocumentEntry {
             uuid: Uuid::parse_str(uuid).unwrap(),
             visible_name: name.to_string(),
-            item_type,
+            kind,
             parent,
             deleted,
             pinned: false,
@@ -266,8 +277,6 @@ mod tests {
             version: 1,
             tags: vec![],
             last_opened: None,
-            file_type,
-            page_count: None,
         }
     }
 

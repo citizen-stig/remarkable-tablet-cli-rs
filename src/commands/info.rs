@@ -1,29 +1,20 @@
 use serde::Serialize;
-use uuid::Uuid;
 
 use crate::cli::{GlobalOptions, InfoArgs};
-use crate::commands::common::{self, ItemKind};
+use crate::commands::common::{self, EntryView};
 use crate::connection::TabletConnection;
 use crate::error::{CliError, Result};
-use crate::metadata::FileType;
 use crate::output::{self, OutputFormat};
 use crate::path_resolver::{self, Resolved};
 use crate::tree::DocumentTree;
 
 #[derive(Serialize, Debug)]
 pub struct InfoOutput {
-    pub uuid: Uuid,
-    pub path: String,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub kind: ItemKind,
-    pub file_type: Option<FileType>,
-    pub deleted: bool,
-    pub pinned: bool,
-    pub tags: Vec<String>,
+    #[serde(flatten)]
+    pub entry: EntryView,
     /// Verbatim `.metadata` JSON.
     pub metadata: serde_json::Value,
-    /// Verbatim `.content` JSON, or `null` for folders / when the file is missing.
+    /// Verbatim `.content` JSON, or `null` when the file is missing/unreadable.
     pub content: Option<serde_json::Value>,
 }
 
@@ -63,33 +54,23 @@ pub async fn run_with_conn<C: TabletConnection>(
         Resolved::Entry(e) => e,
     };
 
-    let path = common::entry_path(tree, entry);
     let metadata_path = format!("{data_dir}/{}.metadata", entry.uuid);
     let metadata_bytes = conn.read_file(&metadata_path).await?;
     let metadata: serde_json::Value = serde_json::from_slice(&metadata_bytes)?;
 
-    // A single SFTP read; missing/unreadable `.content` is treated as `None`,
-    // matching `tablet::load_one`. This drops a redundant `try_exists`
-    // round-trip on the listing path.
+    // The tree only contains documents whose `.content` parsed cleanly at
+    // load time, so a Document entry here is guaranteed loadable. Folders
+    // and templates skip the read entirely.
     let content = if entry.is_document() {
         let content_path = format!("{data_dir}/{}.content", entry.uuid);
-        match conn.read_file(&content_path).await {
-            Ok(bytes) => Some(serde_json::from_slice::<serde_json::Value>(&bytes)?),
-            Err(_) => None,
-        }
+        let bytes = conn.read_file(&content_path).await?;
+        Some(serde_json::from_slice::<serde_json::Value>(&bytes)?)
     } else {
         None
     };
 
     Ok(InfoOutput {
-        uuid: entry.uuid,
-        path,
-        name: entry.visible_name.clone(),
-        kind: entry.item_type.into(),
-        file_type: entry.file_type,
-        deleted: entry.is_trashed(),
-        pinned: entry.pinned,
-        tags: entry.tags.clone(),
+        entry: EntryView::from_entry(tree, entry),
         metadata,
         content,
     })
@@ -103,21 +84,22 @@ fn print_output(info: &InfoOutput, format: OutputFormat) {
 }
 
 fn print_human(info: &InfoOutput) {
-    println!("uuid:      {}", info.uuid);
-    println!("path:      {}", info.path);
-    println!("name:      {}", info.name);
-    println!("type:      {}", common::type_label(info.kind, None));
-    if let Some(ft) = info.file_type {
-        println!("file_type: {}", common::file_type_label(ft));
+    let e = &info.entry;
+    println!("uuid:      {}", e.uuid);
+    println!("path:      {}", e.path);
+    println!("name:      {}", e.name);
+    println!("type:      {}", common::type_label(&e.kind));
+    if let crate::metadata::ItemKind::Document { file_type, .. } = e.kind {
+        println!("file_type: {}", common::file_type_label(file_type));
     }
-    if info.pinned {
+    if e.pinned {
         println!("pinned:    true");
     }
-    if info.deleted {
+    if e.deleted {
         println!("deleted:   true");
     }
-    if !info.tags.is_empty() {
-        println!("tags:      {}", info.tags.join(", "));
+    if !e.tags.is_empty() {
+        println!("tags:      {}", e.tags.join(", "));
     }
     println!();
     println!("metadata:");

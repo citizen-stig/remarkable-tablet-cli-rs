@@ -6,7 +6,7 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::Serialize;
 
 use crate::connection::TabletConnection;
-use crate::metadata::{self, DocumentEntry, ItemType};
+use crate::metadata::{self, DocumentEntry, ItemKind, ItemType};
 
 /// Maximum concurrent SFTP read requests during metadata loading.
 ///
@@ -163,6 +163,10 @@ pub struct LoadDiagnostics {
     pub uuid_metadata_count: usize,
     /// `(filename, error)` for `.metadata` files that failed to parse.
     pub parse_failures: Vec<(String, String)>,
+    /// `(uuid, error)` for documents whose `.content` could not be read or
+    /// parsed. Documents listed here are excluded from the loaded entries:
+    /// without a usable `.content` we can't classify their file type.
+    pub content_failures: Vec<(uuid::Uuid, String)>,
     /// Wall time spent in the initial `list_dir` SFTP round-trip.
     pub list_dir_elapsed: Duration,
     /// Wall time spent reading + parsing `.metadata` and `.content` files.
@@ -219,7 +223,10 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
     for outcome in outcomes {
         match outcome {
             LoadOutcome::Entry(e) => result.push(e),
-            LoadOutcome::ParseFail(file, err) => diag.parse_failures.push((file, err)),
+            LoadOutcome::MetadataParseFail(file, err) => diag.parse_failures.push((file, err)),
+            LoadOutcome::ContentReadFail(uuid, err) | LoadOutcome::ContentParseFail(uuid, err) => {
+                diag.content_failures.push((uuid, err))
+            }
         }
     }
 
@@ -228,7 +235,12 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
 
 enum LoadOutcome {
     Entry(DocumentEntry),
-    ParseFail(String, String),
+    MetadataParseFail(String, String),
+    /// Document entry whose `.content` could not be read (missing file,
+    /// permission denied, network error). Caller decides whether to surface.
+    ContentReadFail(uuid::Uuid, String),
+    /// Document entry whose `.content` was read but failed to parse.
+    ContentParseFail(uuid::Uuid, String),
 }
 
 async fn load_one<C: TabletConnection>(
@@ -239,37 +251,44 @@ async fn load_one<C: TabletConnection>(
     let meta_path = format!("{data_dir}/{uuid}.metadata");
     let content_path = format!("{data_dir}/{uuid}.content");
     // Speculatively fetch `.content` in parallel with `.metadata`. Folders
-    // don't have a content file; the read fails and is discarded. Documents
-    // (the common case) save a full SFTP round-trip per item.
+    // and templates don't have a content file; the read result is dropped.
+    // Documents (the common case) save a full SFTP round-trip per item.
     let (meta_res, content_res) =
         tokio::join!(conn.read_file(&meta_path), conn.read_file(&content_path),);
     let meta_bytes = meta_res.with_context(|| format!("read {meta_path}"))?;
     let raw = match metadata::parse_metadata(&meta_bytes) {
         Ok(m) => m,
         Err(e) => {
-            return Ok(LoadOutcome::ParseFail(
+            return Ok(LoadOutcome::MetadataParseFail(
                 format!("{uuid}.metadata"),
                 e.to_string(),
             ));
         }
     };
 
-    let (file_type, page_count) = if raw.item_type == ItemType::Document {
-        match content_res
-            .ok()
-            .and_then(|b| metadata::parse_content(&b).ok())
-        {
-            Some(c) => (Some(c.file_type), c.effective_page_count()),
-            None => (None, None),
+    let kind = match raw.item_type {
+        ItemType::Collection => ItemKind::Folder,
+        ItemType::Template => ItemKind::Template,
+        ItemType::Document => {
+            let bytes = match content_res {
+                Ok(b) => b,
+                Err(e) => return Ok(LoadOutcome::ContentReadFail(uuid, format!("{e:#}"))),
+            };
+            let content = match metadata::parse_content(&bytes) {
+                Ok(c) => c,
+                Err(e) => return Ok(LoadOutcome::ContentParseFail(uuid, e.to_string())),
+            };
+            ItemKind::Document {
+                file_type: content.file_type,
+                page_count: content.effective_page_count(),
+            }
         }
-    } else {
-        (None, None)
     };
 
     Ok(LoadOutcome::Entry(DocumentEntry {
         uuid,
         visible_name: raw.visible_name,
-        item_type: raw.item_type,
+        kind,
         parent: raw.parent,
         deleted: raw.deleted,
         pinned: raw.pinned,
@@ -277,8 +296,6 @@ async fn load_one<C: TabletConnection>(
         version: raw.version,
         tags: raw.tags,
         last_opened: raw.last_opened,
-        file_type,
-        page_count,
     }))
 }
 
@@ -300,7 +317,7 @@ fn shell_single_quote(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::connection::FakeConnection;
-    use crate::metadata::{FileType, Parent};
+    use crate::metadata::{FileType, ItemKind, Parent};
     use uuid::Uuid;
 
     const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
@@ -387,20 +404,22 @@ mod tests {
         assert_eq!(entries.len(), 2);
 
         let folder = entries.iter().find(|e| e.visible_name == "Work").unwrap();
-        assert_eq!(folder.item_type, ItemType::Collection);
+        assert!(matches!(folder.kind, ItemKind::Folder));
         assert_eq!(folder.parent, Parent::Root);
-        assert!(folder.file_type.is_none());
-        assert_eq!(folder.page_count, None);
 
         let doc = entries.iter().find(|e| e.visible_name == "Notes").unwrap();
-        assert_eq!(doc.item_type, ItemType::Document);
+        assert!(matches!(
+            doc.kind,
+            ItemKind::Document {
+                file_type: FileType::Notebook,
+                page_count: Some(7),
+            }
+        ));
         assert_eq!(
             doc.parent,
             Parent::Folder(Uuid::parse_str(folder_uuid).unwrap())
         );
-        assert_eq!(doc.file_type, Some(FileType::Notebook));
         assert_eq!(doc.tags, vec!["work"]);
-        assert_eq!(doc.page_count, Some(7));
     }
 
     #[tokio::test]
@@ -421,7 +440,7 @@ mod tests {
         );
 
         let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
-        assert_eq!(entries[0].page_count, Some(4));
+        assert_eq!(entries[0].page_count(), Some(4));
     }
 
     #[tokio::test]
@@ -477,21 +496,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_metadata_missing_content() {
+    async fn load_metadata_missing_content_drops_doc_and_records_diagnostic() {
         let conn = FakeConnection::new();
         conn.mkdir(DATA_DIR);
 
-        let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let uuid_str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         set_metadata(
             &conn,
-            uuid,
+            uuid_str,
             r#"{"visibleName":"Doc","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710000000000,"metadatamodified":1710000000000,"version":1}"#,
         );
-        // No .content file
+        // No .content file: the document is unclassifiable, gets dropped, and
+        // its UUID lands in `diag.content_failures`.
 
-        let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].file_type.is_none());
+        let (entries, diag) = load_all_metadata_full(&conn, DATA_DIR).await.unwrap();
+        assert!(entries.is_empty());
+        assert_eq!(diag.content_failures.len(), 1);
+        assert_eq!(diag.content_failures[0].0, Uuid::parse_str(uuid_str).unwrap());
+    }
+
+    #[tokio::test]
+    async fn load_metadata_unparseable_content_drops_doc_and_records_diagnostic() {
+        let conn = FakeConnection::new();
+        conn.mkdir(DATA_DIR);
+
+        let uuid_str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        set_metadata(
+            &conn,
+            uuid_str,
+            r#"{"visibleName":"Doc","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710000000000,"metadatamodified":1710000000000,"version":1}"#,
+        );
+        set_content(&conn, uuid_str, "not json {{{");
+
+        let (entries, diag) = load_all_metadata_full(&conn, DATA_DIR).await.unwrap();
+        assert!(entries.is_empty());
+        assert_eq!(diag.content_failures.len(), 1);
+        assert_eq!(diag.content_failures[0].0, Uuid::parse_str(uuid_str).unwrap());
     }
 
     #[tokio::test]
@@ -524,6 +564,6 @@ mod tests {
 
         let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].file_type, Some(FileType::Pdf));
+        assert_eq!(entries[0].file_type(), Some(FileType::Pdf));
     }
 }

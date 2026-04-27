@@ -1,9 +1,9 @@
 use chrono::{TimeZone, Utc};
 use remarkable_tablet_cli_rs::cli::{FindArgs, FindTypeFilter, InfoArgs, LsArgs, SortField};
-use remarkable_tablet_cli_rs::commands::{common, find, info, ls};
+use remarkable_tablet_cli_rs::commands::{find, info, ls};
 use remarkable_tablet_cli_rs::connection::FakeConnection;
 use remarkable_tablet_cli_rs::error::CliError;
-use remarkable_tablet_cli_rs::metadata::{DocumentEntry, FileType, ItemType, Parent};
+use remarkable_tablet_cli_rs::metadata::{DocumentEntry, FileType, ItemKind, ItemType, Parent};
 use remarkable_tablet_cli_rs::tablet::load_all_metadata;
 use remarkable_tablet_cli_rs::tree::DocumentTree;
 use uuid::Uuid;
@@ -118,10 +118,21 @@ fn make_entry(
     file_type: Option<FileType>,
 ) -> DocumentEntry {
     let deleted = parent == Parent::Trash;
+    let kind = match (item_type, file_type) {
+        (ItemType::Collection, _) => ItemKind::Folder,
+        (ItemType::Template, _) => ItemKind::Template,
+        (ItemType::Document, Some(file_type)) => ItemKind::Document {
+            file_type,
+            page_count: None,
+        },
+        (ItemType::Document, None) => {
+            unreachable!("test helper requires Some(file_type) for documents")
+        }
+    };
     DocumentEntry {
         uuid: Uuid::parse_str(uuid).unwrap(),
         visible_name: name.to_string(),
-        item_type,
+        kind,
         parent,
         deleted,
         pinned: false,
@@ -129,8 +140,6 @@ fn make_entry(
         version: 1,
         tags: vec![],
         last_opened: None,
-        file_type,
-        page_count: None,
     }
 }
 
@@ -143,7 +152,7 @@ async fn ls_root_lists_direct_children_folders_first() {
     let conn = setup_fake_tablet();
     let tree = build_tree(&conn).await;
     let items = flat(ls::run_with_tree(&tree, &ls_args()).unwrap());
-    let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+    let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     assert_eq!(names, vec!["Work", "Quick Read"]);
 }
 
@@ -154,7 +163,7 @@ async fn ls_path_lists_subfolder_children() {
     let mut args = ls_args();
     args.path_or_uuid = Some("/Work".into());
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
-    let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+    let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     assert_eq!(names, vec!["Projects", "Meeting Notes"]);
 }
 
@@ -165,7 +174,7 @@ async fn ls_resolves_uuid_arg() {
     let mut args = ls_args();
     args.path_or_uuid = Some(FOLDER_WORK.into());
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
-    let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+    let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     assert_eq!(names, vec!["Projects", "Meeting Notes"]);
 }
 
@@ -179,7 +188,7 @@ async fn ls_recursive_flat_includes_depth() {
     // Default sort: folders first then alpha. Recursive walks Work, then Projects, then Research Paper, then Meeting Notes, then Quick Read.
     let pairs: Vec<_> = items
         .iter()
-        .map(|i| (i.depth.unwrap(), i.name.as_str()))
+        .map(|i| (i.depth.unwrap(), i.entry.name.as_str()))
         .collect();
     assert_eq!(
         pairs,
@@ -202,7 +211,7 @@ async fn ls_depth_limit() {
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
     let depths: Vec<_> = items.iter().map(|i| i.depth.unwrap()).collect();
     assert!(depths.iter().all(|d| *d == 0));
-    let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+    let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     assert_eq!(names, vec!["Work", "Quick Read"]);
 }
 
@@ -213,7 +222,7 @@ async fn ls_documents_only() {
     let mut args = ls_args();
     args.documents_only = true;
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
-    let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+    let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     assert_eq!(names, vec!["Quick Read"]);
 }
 
@@ -224,7 +233,7 @@ async fn ls_folders_only() {
     let mut args = ls_args();
     args.folders_only = true;
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
-    let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+    let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     assert_eq!(names, vec!["Work"]);
 }
 
@@ -236,7 +245,11 @@ async fn ls_include_trashed_recursive_surfaces_old_draft() {
     args.recursive = true;
     args.include_trashed = true;
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
-    assert!(items.iter().any(|i| i.name == "Old Draft" && i.deleted));
+    assert!(
+        items
+            .iter()
+            .any(|i| i.entry.name == "Old Draft" && i.entry.deleted)
+    );
 }
 
 #[tokio::test]
@@ -250,7 +263,7 @@ async fn ls_include_trashed_recursive_name_sort_merges_trash_into_root_order() {
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
     let pairs: Vec<_> = items
         .iter()
-        .map(|i| (i.depth.unwrap(), i.name.as_str()))
+        .map(|i| (i.depth.unwrap(), i.entry.name.as_str()))
         .collect();
     assert_eq!(
         pairs,
@@ -272,11 +285,11 @@ async fn ls_include_trashed_flat_root_surfaces_old_draft_under_trash_path() {
     let mut args = ls_args();
     args.include_trashed = true;
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
-    let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+    let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     assert_eq!(names, vec!["Work", "Old Draft", "Quick Read"]);
-    let trashed = items.iter().find(|i| i.name == "Old Draft").unwrap();
-    assert!(trashed.deleted);
-    assert_eq!(trashed.path, "/trash/Old Draft");
+    let trashed = items.iter().find(|i| i.entry.name == "Old Draft").unwrap();
+    assert!(trashed.entry.deleted);
+    assert_eq!(trashed.entry.path, "/trash/Old Draft");
 }
 
 #[tokio::test]
@@ -287,7 +300,7 @@ async fn ls_sort_modified_descending() {
     args.path_or_uuid = Some("/Work".into());
     args.sort = Some(SortField::Modified);
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
-    let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+    let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     // Meeting Notes (1710604800000) is newer than Projects (1710518400000)
     assert_eq!(names, vec!["Meeting Notes", "Projects"]);
 }
@@ -319,16 +332,19 @@ async fn ls_populates_page_count_and_children_count() {
     let conn = setup_fake_tablet();
     let tree = build_tree(&conn).await;
     let items = flat(ls::run_with_tree(&tree, &ls_args()).unwrap());
-    let work = items.iter().find(|i| i.name == "Work").unwrap();
-    assert_eq!(work.kind, common::ItemKind::Folder);
+    let work = items.iter().find(|i| i.entry.name == "Work").unwrap();
+    assert!(matches!(work.entry.kind, ItemKind::Folder));
     assert_eq!(work.children_count, Some(2));
-    assert_eq!(work.page_count, None);
 
-    let quick = items.iter().find(|i| i.name == "Quick Read").unwrap();
-    assert_eq!(quick.kind, common::ItemKind::Document);
-    assert_eq!(quick.file_type, Some(FileType::Epub));
-    assert_eq!(quick.page_count, Some(300));
-    assert!(quick.pinned);
+    let quick = items.iter().find(|i| i.entry.name == "Quick Read").unwrap();
+    assert!(matches!(
+        quick.entry.kind,
+        ItemKind::Document {
+            file_type: FileType::Epub,
+            page_count: Some(300),
+        }
+    ));
+    assert!(quick.entry.pinned);
 }
 
 #[tokio::test]
@@ -374,9 +390,9 @@ async fn ls_tree_carries_page_count_for_documents_only() {
     args.tree = true;
     let root = tree_node(ls::run_with_tree(&tree, &args).unwrap());
 
-    // Folders: page_count is None.
+    // Folders: kind is Folder, no page_count field at all.
     let work = root.children.iter().find(|c| c.name == "Work").unwrap();
-    assert_eq!(work.page_count, None);
+    assert!(matches!(work.kind, ItemKind::Folder));
 
     // Documents: page_count populated from .content.
     let quick = root
@@ -384,14 +400,26 @@ async fn ls_tree_carries_page_count_for_documents_only() {
         .iter()
         .find(|c| c.name == "Quick Read")
         .unwrap();
-    assert_eq!(quick.page_count, Some(300));
+    assert!(matches!(
+        quick.kind,
+        ItemKind::Document {
+            page_count: Some(300),
+            ..
+        }
+    ));
 
     let meeting = work
         .children
         .iter()
         .find(|c| c.name == "Meeting Notes")
         .unwrap();
-    assert_eq!(meeting.page_count, Some(12));
+    assert!(matches!(
+        meeting.kind,
+        ItemKind::Document {
+            page_count: Some(12),
+            ..
+        }
+    ));
 }
 
 #[tokio::test]
@@ -449,12 +477,17 @@ async fn info_returns_metadata_and_content() {
     let out = info::run_with_conn(&conn, DATA_DIR, &tree, &args)
         .await
         .unwrap();
-    assert_eq!(out.uuid, Uuid::parse_str(DOC_NOTES).unwrap());
-    assert_eq!(out.path, "/Work/Meeting Notes");
-    assert_eq!(out.name, "Meeting Notes");
-    assert_eq!(out.kind, common::ItemKind::Document);
-    assert_eq!(out.file_type, Some(FileType::Notebook));
-    assert_eq!(out.tags, vec!["work", "meetings"]);
+    assert_eq!(out.entry.uuid, Uuid::parse_str(DOC_NOTES).unwrap());
+    assert_eq!(out.entry.path, "/Work/Meeting Notes");
+    assert_eq!(out.entry.name, "Meeting Notes");
+    assert!(matches!(
+        out.entry.kind,
+        ItemKind::Document {
+            file_type: FileType::Notebook,
+            page_count: Some(12),
+        }
+    ));
+    assert_eq!(out.entry.tags, vec!["work", "meetings"]);
     let content = out.content.as_ref().unwrap();
     assert_eq!(content["fileType"], "notebook");
     assert_eq!(content["pageCount"], 12);
@@ -485,8 +518,8 @@ async fn info_uuid_matches_path() {
     )
     .await
     .unwrap();
-    assert_eq!(by_path.uuid, by_uuid.uuid);
-    assert_eq!(by_path.path, by_uuid.path);
+    assert_eq!(by_path.entry.uuid, by_uuid.entry.uuid);
+    assert_eq!(by_path.entry.path, by_uuid.entry.path);
 }
 
 #[tokio::test]
@@ -500,6 +533,10 @@ async fn info_orphan_uuid_uses_fallback_path() {
             r#"{{"visibleName":"Orphaned","type":"DocumentType","parent":"{orphan_parent}","deleted":false,"pinned":false,"lastModified":1710700000000,"metadatamodified":1710700000000,"version":1}}"#
         ),
     );
+    conn.set_file(
+        &format!("{DATA_DIR}/{DOC_PAPER}.content"),
+        r#"{"fileType":"pdf"}"#,
+    );
     let tree = build_tree(&conn).await;
     let out = info::run_with_conn(
         &conn,
@@ -511,8 +548,8 @@ async fn info_orphan_uuid_uses_fallback_path() {
     )
     .await
     .unwrap();
-    assert_eq!(out.uuid, Uuid::parse_str(DOC_PAPER).unwrap());
-    assert_eq!(out.path, "/Orphaned");
+    assert_eq!(out.entry.uuid, Uuid::parse_str(DOC_PAPER).unwrap());
+    assert_eq!(out.entry.path, "/Orphaned");
 }
 
 #[tokio::test]
@@ -552,15 +589,28 @@ async fn info_missing_target_is_not_found() {
 }
 
 #[tokio::test]
-async fn info_document_without_content_yields_null_content() {
+async fn info_document_without_content_is_dropped_from_tree() {
+    // A document whose `.content` is missing on disk is not classifiable; the
+    // loader drops it and records the failure in diagnostics. `info` sees an
+    // empty tree and returns NotFound.
+    use remarkable_tablet_cli_rs::tablet::load_all_metadata_full;
     let conn = FakeConnection::new();
     conn.mkdir(DATA_DIR);
     conn.set_file(
         &format!("{DATA_DIR}/{DOC_PAPER}.metadata"),
         r#"{"visibleName":"Research Paper","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710700000000,"metadatamodified":1710700000000,"version":1,"tags":["research"]}"#,
     );
-    let tree = build_tree(&conn).await;
-    let out = info::run_with_conn(
+
+    let (entries, diag) = load_all_metadata_full(&conn, DATA_DIR).await.unwrap();
+    assert!(entries.is_empty());
+    assert_eq!(diag.content_failures.len(), 1);
+    assert_eq!(
+        diag.content_failures[0].0,
+        Uuid::parse_str(DOC_PAPER).unwrap()
+    );
+
+    let tree = DocumentTree::build(entries);
+    let err = info::run_with_conn(
         &conn,
         DATA_DIR,
         &tree,
@@ -569,20 +619,32 @@ async fn info_document_without_content_yields_null_content() {
         },
     )
     .await
-    .unwrap();
-    assert!(out.content.is_none());
-    assert_eq!(out.metadata["visibleName"], "Research Paper");
+    .unwrap_err();
+    let cli = err.downcast_ref::<CliError>().unwrap();
+    assert!(matches!(cli, CliError::NotFound(_)));
 }
 
 #[tokio::test]
-async fn info_document_content_read_failure_yields_none() {
-    // Aligned with `tablet::load_one`: a `.content` read that fails for any
-    // reason is absorbed into `content: None` rather than aborting `info`.
+async fn info_document_content_read_failure_drops_from_tree() {
+    // A document whose `.content` exists but cannot be read at load time is
+    // treated identically to the missing case: dropped, surfaced via
+    // diagnostics. `info` then returns NotFound.
+    use remarkable_tablet_cli_rs::tablet::load_all_metadata_full;
     let conn = setup_fake_tablet();
-    let tree = build_tree(&conn).await;
     let path = format!("{DATA_DIR}/{DOC_PAPER}.content");
     conn.set_read_error(&path, "permission denied");
-    let out = info::run_with_conn(
+
+    let (entries, diag) = load_all_metadata_full(&conn, DATA_DIR).await.unwrap();
+    let paper_uuid = Uuid::parse_str(DOC_PAPER).unwrap();
+    assert!(entries.iter().all(|e| e.uuid != paper_uuid));
+    assert!(
+        diag.content_failures
+            .iter()
+            .any(|(uuid, _)| *uuid == paper_uuid)
+    );
+
+    let tree = DocumentTree::build(entries);
+    let err = info::run_with_conn(
         &conn,
         DATA_DIR,
         &tree,
@@ -591,8 +653,9 @@ async fn info_document_content_read_failure_yields_none() {
         },
     )
     .await
-    .unwrap();
-    assert!(out.content.is_none());
+    .unwrap_err();
+    let cli = err.downcast_ref::<CliError>().unwrap();
+    assert!(matches!(cli, CliError::NotFound(_)));
 }
 
 #[tokio::test]
@@ -609,7 +672,7 @@ async fn info_folder_returns_no_content() {
     )
     .await
     .unwrap();
-    assert_eq!(out.kind, common::ItemKind::Folder);
+    assert!(matches!(out.entry.kind, ItemKind::Folder));
     assert!(out.content.is_none());
 }
 

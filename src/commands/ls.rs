@@ -6,7 +6,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::cli::{GlobalOptions, LsArgs, SortField};
-use crate::commands::common::{self, ItemKind};
+use crate::commands::common::{self, EntryView, ItemKind};
 use crate::error::{CliError, Result};
 use crate::metadata::{DocumentEntry, FileType, Parent};
 use crate::output::{self, OutputFormat};
@@ -15,20 +15,10 @@ use crate::tree::{self, DocumentTree, EntryKindFilter, ListFilter};
 
 #[derive(Serialize, Debug)]
 pub struct LsItem {
-    pub uuid: Uuid,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub kind: ItemKind,
-    pub file_type: Option<FileType>,
-    pub parent_uuid: Option<Uuid>,
-    pub path: String,
-    pub modified: DateTime<Utc>,
-    pub last_opened: Option<DateTime<Utc>>,
-    pub tags: Vec<String>,
-    pub pinned: bool,
-    pub deleted: bool,
+    #[serde(flatten)]
+    pub entry: EntryView,
+    /// Number of direct children for folders; `None` for documents/templates.
     pub children_count: Option<usize>,
-    pub page_count: Option<u32>,
     /// 0 for direct children of the listed folder; only set for recursive listings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<u32>,
@@ -39,18 +29,14 @@ pub struct TreeNode {
     /// `None` for virtual nodes such as the synthetic root (`/`) or `trash`.
     pub uuid: Option<Uuid>,
     pub name: String,
-    #[serde(rename = "type")]
+    #[serde(flatten)]
     pub kind: ItemKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_type: Option<FileType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_opened: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "is_false")]
     pub pinned: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub page_count: Option<u32>,
     pub children: Vec<TreeNode>,
 }
 
@@ -164,19 +150,8 @@ fn to_ls_item(tree: &DocumentTree, e: &DocumentEntry, depth: Option<u32>) -> LsI
         None
     };
     LsItem {
-        uuid: e.uuid,
-        name: e.visible_name.clone(),
-        kind: e.item_type.into(),
-        file_type: e.file_type,
-        parent_uuid: e.parent_uuid(),
-        path: common::entry_path(tree, e),
-        modified: e.last_modified,
-        last_opened: e.last_opened,
-        tags: e.tags.clone(),
-        pinned: e.pinned,
-        deleted: e.is_trashed(),
+        entry: EntryView::from_entry(tree, e),
         children_count,
-        page_count: e.page_count,
         depth,
     }
 }
@@ -186,11 +161,9 @@ fn virtual_tree_folder(name: &str, children: Vec<TreeNode>) -> TreeNode {
         uuid: None,
         name: name.to_string(),
         kind: ItemKind::Folder,
-        file_type: None,
         last_opened: None,
         tags: Vec::new(),
         pinned: false,
-        page_count: None,
         children,
     }
 }
@@ -314,19 +287,17 @@ fn build_tree_node(
     filter: ListFilter<'_>,
     depth: Option<u32>,
 ) -> anyhow::Result<TreeNode> {
-    let (uuid, kind, file_type, last_opened, tags, pinned) = match &target.parent {
+    let (uuid, last_opened, tags, pinned) = match &target.parent {
         Parent::Folder(u) => {
             let entry = tree.get(u).expect("target folder exists in tree");
             (
                 Some(entry.uuid),
-                ItemKind::Folder,
-                entry.file_type,
                 entry.last_opened,
                 entry.tags.clone(),
                 entry.pinned,
             )
         }
-        _ => (None, ItemKind::Folder, None, None, Vec::new(), false),
+        _ => (None, None, Vec::new(), false),
     };
 
     let mut ancestors = HashSet::new();
@@ -345,12 +316,10 @@ fn build_tree_node(
     Ok(TreeNode {
         uuid,
         name: target.name.clone(),
-        kind,
-        file_type,
+        kind: ItemKind::Folder,
         last_opened,
         tags,
         pinned,
-        page_count: None,
         children,
     })
 }
@@ -404,12 +373,10 @@ fn build_tree_children(
             Ok(Some(TreeNode {
                 uuid: Some(e.uuid),
                 name: e.visible_name.clone(),
-                kind: e.item_type.into(),
-                file_type: e.file_type,
+                kind: e.kind.clone(),
                 last_opened: e.last_opened,
                 tags: e.tags.clone(),
                 pinned: e.pinned,
-                page_count: e.page_count,
                 children: nested,
             }))
         })
@@ -439,9 +406,9 @@ fn print_flat_human(items: &[LsItem]) {
     let rows: Vec<[String; 4]> = items
         .iter()
         .map(|i| {
-            let type_label = common::type_label(i.kind, i.file_type).to_string();
+            let type_label = common::type_label(&i.entry.kind).to_string();
             let name = flat_item_name(i, recursive);
-            let modified = i.modified.format("%Y-%m-%d %H:%M:%S").to_string();
+            let modified = i.entry.last_modified.format("%Y-%m-%d %H:%M:%S").to_string();
             let extras = format_extras(i);
             [type_label, name, modified, extras]
         })
@@ -477,23 +444,24 @@ fn print_flat_human(items: &[LsItem]) {
 }
 
 fn flat_item_name(item: &LsItem, recursive: bool) -> String {
+    let e = &item.entry;
     if recursive {
-        return item.path.clone();
+        return e.path.clone();
     }
-    if item.deleted {
-        let mut name = item.path.clone();
-        if item.kind == ItemKind::Folder {
+    if e.deleted {
+        let mut name = e.path.clone();
+        if matches!(e.kind, ItemKind::Folder) {
             name.push('/');
-        } else if item.pinned {
+        } else if e.pinned {
             name.push_str(" *");
         }
         return name;
     }
-    if item.kind == ItemKind::Folder {
-        format!("{}/", item.name)
+    if matches!(e.kind, ItemKind::Folder) {
+        format!("{}/", e.name)
     } else {
-        let mut name = item.name.clone();
-        if item.pinned {
+        let mut name = e.name.clone();
+        if e.pinned {
             name.push_str(" *");
         }
         name
@@ -501,25 +469,27 @@ fn flat_item_name(item: &LsItem, recursive: bool) -> String {
 }
 
 fn format_extras(item: &LsItem) -> String {
+    let e = &item.entry;
     let mut parts = Vec::new();
-    if item.deleted {
+    if e.deleted {
         parts.push("[trashed]".to_string());
     }
-    match item.kind {
+    match &e.kind {
         ItemKind::Folder => {
             if let Some(n) = item.children_count {
                 parts.push(format!("{n} item{}", if n == 1 { "" } else { "s" }));
             }
         }
-        ItemKind::Document => {
-            if let Some(p) = item.page_count {
-                parts.push(format!("{p}p"));
-            }
+        ItemKind::Document {
+            page_count: Some(p),
+            ..
+        } => {
+            parts.push(format!("{p}p"));
         }
-        ItemKind::Template => {}
+        ItemKind::Document { .. } | ItemKind::Template => {}
     }
-    if !item.tags.is_empty() {
-        parts.push(format!("tags: {}", item.tags.join(", ")));
+    if !e.tags.is_empty() {
+        parts.push(format!("tags: {}", e.tags.join(", ")));
     }
     parts.join("  ")
 }
@@ -566,24 +536,36 @@ fn tree_label(node: &TreeNode, is_root: bool) -> String {
         return node.name.clone();
     }
     let mut parts = Vec::new();
-    let name = if node.kind == ItemKind::Folder {
+    let name = if matches!(node.kind, ItemKind::Folder) {
         format!("{}/", node.name)
     } else {
         node.name.clone()
     };
     parts.push(name);
-    let type_tag = match (node.kind, node.file_type) {
-        (ItemKind::Folder, _) => None,
-        (ItemKind::Document, Some(FileType::Pdf)) => Some("[pdf]"),
-        (ItemKind::Document, Some(FileType::Epub)) => Some("[epub]"),
-        (ItemKind::Document, Some(FileType::Notebook)) => Some("[notebook]"),
-        (ItemKind::Document, None) => Some("[document]"),
-        (ItemKind::Template, _) => Some("[template]"),
+    let type_tag = match &node.kind {
+        ItemKind::Folder => None,
+        ItemKind::Document {
+            file_type: FileType::Pdf,
+            ..
+        } => Some("[pdf]"),
+        ItemKind::Document {
+            file_type: FileType::Epub,
+            ..
+        } => Some("[epub]"),
+        ItemKind::Document {
+            file_type: FileType::Notebook,
+            ..
+        } => Some("[notebook]"),
+        ItemKind::Template => Some("[template]"),
     };
     if let Some(t) = type_tag {
         parts.push(t.to_string());
     }
-    if let Some(p) = node.page_count {
+    if let ItemKind::Document {
+        page_count: Some(p),
+        ..
+    } = &node.kind
+    {
         parts.push(format!("{p}p"));
     }
     if let Some(opened) = node.last_opened {

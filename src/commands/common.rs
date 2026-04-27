@@ -1,55 +1,83 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
+use uuid::Uuid;
 
 use crate::cli::GlobalOptions;
 use crate::config::{self, ResolvedConfig};
 use crate::connection::{ConnectOptions, SshConnection};
 use crate::error::CliError;
-use crate::metadata::{DocumentEntry, FileType, ItemType};
+use crate::metadata::{DocumentEntry, FileType};
+pub use crate::metadata::ItemKind;
 use crate::output;
 use crate::path_resolver;
 use crate::tablet::{self};
 use crate::tree::DocumentTree;
 
-/// User-facing projection of [`ItemType`] for the CLI's JSON output schema:
-/// serializes as lowercase `"folder"`/`"document"`/`"template"` and renames
-/// `Collection` → `Folder` to match how users describe a tablet's hierarchy.
-///
-/// Kept separate from `ItemType` because serde tags apply equally in both
-/// directions — one enum can't serialize as `"DocumentType"` for
-/// `.metadata` round-trips and `"document"` for CLI output. Convert via
-/// `ItemKind::from(item_type)` at the output boundary.
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ItemKind {
-    Folder,
-    Document,
-    Template,
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
-impl From<ItemType> for ItemKind {
-    fn from(t: ItemType) -> Self {
-        match t {
-            ItemType::Collection => ItemKind::Folder,
-            ItemType::Document => ItemKind::Document,
-            ItemType::Template => ItemKind::Template,
+/// Shared output-side projection of a [`DocumentEntry`]: the fields that
+/// `ls`, `find`, and `info` all want in their JSON. Composed into each
+/// command's output struct via `#[serde(flatten)]`. Tree mode uses its own
+/// recursive shape and does not embed this.
+#[derive(Serialize, Debug)]
+pub struct EntryView {
+    pub uuid: Uuid,
+    pub name: String,
+    pub path: String,
+    #[serde(flatten)]
+    pub kind: ItemKind,
+    pub parent_uuid: Option<Uuid>,
+    pub last_modified: DateTime<Utc>,
+    pub last_opened: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub pinned: bool,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub deleted: bool,
+}
+
+impl EntryView {
+    pub fn from_entry(tree: &DocumentTree, entry: &DocumentEntry) -> Self {
+        Self {
+            uuid: entry.uuid,
+            name: entry.visible_name.clone(),
+            path: entry_path(tree, entry),
+            kind: entry.kind.clone(),
+            parent_uuid: entry.parent_uuid(),
+            last_modified: entry.last_modified,
+            last_opened: entry.last_opened,
+            tags: entry.tags.clone(),
+            pinned: entry.pinned,
+            deleted: entry.is_trashed(),
         }
     }
 }
 
-/// Combined label for `(kind, file_type)`. Used by `ls` flat output and `find`.
-pub fn type_label(kind: ItemKind, file_type: Option<FileType>) -> &'static str {
-    match (kind, file_type) {
-        (ItemKind::Folder, _) => "folder",
-        (ItemKind::Document, Some(FileType::Pdf)) => "pdf",
-        (ItemKind::Document, Some(FileType::Epub)) => "epub",
-        (ItemKind::Document, Some(FileType::Notebook)) => "notebook",
-        (ItemKind::Document, None) => "document",
-        (ItemKind::Template, _) => "template",
+/// Single-word label for an entry's kind. Used by `ls` flat output and `find`.
+pub fn type_label(kind: &ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Folder => "folder",
+        ItemKind::Document {
+            file_type: FileType::Pdf,
+            ..
+        } => "pdf",
+        ItemKind::Document {
+            file_type: FileType::Epub,
+            ..
+        } => "epub",
+        ItemKind::Document {
+            file_type: FileType::Notebook,
+            ..
+        } => "notebook",
+        ItemKind::Template => "template",
     }
 }
 
@@ -117,17 +145,21 @@ pub async fn connect_and_load_tree(
     output::log_verbose(
         global,
         &format!(
-            "xochitl: {} dir entries ({}ms list_dir), {} matched <uuid>.metadata, {} parsed in {}ms, {} parse failures",
+            "xochitl: {} dir entries ({}ms list_dir), {} matched <uuid>.metadata, {} parsed in {}ms, {} parse failures, {} content failures",
             diag.dir_entry_count,
             diag.list_dir_elapsed.as_millis(),
             diag.uuid_metadata_count,
             entries.len(),
             diag.read_elapsed.as_millis(),
             diag.parse_failures.len(),
+            diag.content_failures.len(),
         ),
     );
     for (file, err) in &diag.parse_failures {
         output::log_verbose(global, &format!("  parse failed: {file}: {err}"));
+    }
+    for (uuid, err) in &diag.content_failures {
+        output::log_verbose(global, &format!("  content failed: {uuid}: {err}"));
     }
     Ok((ssh, cfg, DocumentTree::build(entries)))
 }

@@ -1,24 +1,13 @@
 use glob::{MatchOptions, Pattern};
-use serde::Serialize;
-use uuid::Uuid;
 
 use crate::cli::{FindArgs, FindTypeFilter, GlobalOptions};
-use crate::commands::common::{self, ItemKind};
+use crate::commands::common::{self, EntryView};
 use crate::error::{CliError, Result};
-use crate::metadata::{DocumentEntry, FileType};
+use crate::metadata::DocumentEntry;
 use crate::output::{self, OutputFormat};
 use crate::tree::DocumentTree;
 
-#[derive(Serialize, Debug)]
-pub struct FindItem {
-    pub uuid: Uuid,
-    pub name: String,
-    pub path: String,
-    #[serde(rename = "type")]
-    pub kind: ItemKind,
-    pub file_type: Option<FileType>,
-    pub parent_uuid: Option<Uuid>,
-}
+pub type FindItem = EntryView;
 
 pub async fn execute(global: &GlobalOptions, args: &FindArgs) -> Result<()> {
     run(global, args).await.map_err(common::to_cli_error)
@@ -54,14 +43,7 @@ pub fn run_with_tree(tree: &DocumentTree, args: &FindArgs) -> anyhow::Result<Vec
 }
 
 fn to_find_item(tree: &DocumentTree, e: &DocumentEntry) -> FindItem {
-    FindItem {
-        uuid: e.uuid,
-        name: e.visible_name.clone(),
-        path: common::entry_path(tree, e),
-        kind: e.item_type.into(),
-        file_type: e.file_type,
-        parent_uuid: e.parent_uuid(),
-    }
+    EntryView::from_entry(tree, e)
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +124,7 @@ fn print_human(items: &[FindItem]) {
         println!(
             "{}  [{}]  {}",
             item.path,
-            common::type_label(item.kind, item.file_type),
+            common::type_label(&item.kind),
             item.uuid,
         );
     }

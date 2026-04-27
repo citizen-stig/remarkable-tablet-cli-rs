@@ -32,6 +32,31 @@ pub enum FileType {
     Notebook,
 }
 
+/// User-facing entry kind. Carries document-only data (`file_type`,
+/// `page_count`) inside the `Document` variant so the type system enforces
+/// that those fields exist iff the entry is a document.
+///
+/// Serializes as a tagged enum: `{"type": "document", "file_type": "pdf",
+/// "page_count": 12}`. Combined with `#[serde(flatten)]` on the carrier
+/// struct it produces a flat JSON object.
+///
+/// Kept distinct from [`ItemType`] (which mirrors the on-disk
+/// `DocumentType`/`CollectionType`/`TemplateType` strings used by xochitl's
+/// `.metadata` files).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ItemKind {
+    Folder,
+    Document {
+        file_type: FileType,
+        /// Older firmware can omit `pageCount` from `.content` and ship no
+        /// `pages` array either; in that case the page count is genuinely
+        /// unknown.
+        page_count: Option<u32>,
+    },
+    Template,
+}
+
 /// Typed parent reference. Root and Trash are logical containers without UUIDs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Parent {
@@ -227,19 +252,17 @@ impl RawContent {
 pub struct DocumentEntry {
     pub uuid: Uuid,
     pub visible_name: String,
-    pub item_type: ItemType,
+    #[serde(flatten)]
+    pub kind: ItemKind,
     pub parent: Parent,
     pub deleted: bool,
     pub pinned: bool,
     #[serde(serialize_with = "serialize_epoch_ms")]
     pub last_modified: DateTime<Utc>,
     pub version: u32,
-    #[serde(default)]
     pub tags: Vec<String>,
     #[serde(serialize_with = "serialize_option_epoch_ms")]
     pub last_opened: Option<DateTime<Utc>>,
-    pub file_type: Option<FileType>,
-    pub page_count: Option<u32>,
 }
 
 impl DocumentEntry {
@@ -252,15 +275,29 @@ impl DocumentEntry {
     }
 
     pub fn is_folder(&self) -> bool {
-        self.item_type == ItemType::Collection
+        matches!(self.kind, ItemKind::Folder)
     }
 
     pub fn is_document(&self) -> bool {
-        self.item_type == ItemType::Document
+        matches!(self.kind, ItemKind::Document { .. })
     }
 
     pub fn is_template(&self) -> bool {
-        self.item_type == ItemType::Template
+        matches!(self.kind, ItemKind::Template)
+    }
+
+    pub fn file_type(&self) -> Option<FileType> {
+        match self.kind {
+            ItemKind::Document { file_type, .. } => Some(file_type),
+            _ => None,
+        }
+    }
+
+    pub fn page_count(&self) -> Option<u32> {
+        match self.kind {
+            ItemKind::Document { page_count, .. } => page_count,
+            _ => None,
+        }
     }
 
     /// UUID of the parent folder, or `None` for root-level and trashed items.
@@ -271,15 +308,23 @@ impl DocumentEntry {
         }
     }
 
-    /// Sort key for ordering by type: folders < notebooks < PDFs < ePubs < unknown < templates.
+    /// Sort key for ordering by type: folders < notebooks < PDFs < ePubs < templates.
     pub fn type_sort_key(&self) -> u8 {
-        match (self.item_type, self.file_type) {
-            (ItemType::Collection, _) => 0,
-            (ItemType::Document, Some(FileType::Notebook)) => 1,
-            (ItemType::Document, Some(FileType::Pdf)) => 2,
-            (ItemType::Document, Some(FileType::Epub)) => 3,
-            (ItemType::Document, None) => 4,
-            (ItemType::Template, _) => 5,
+        match self.kind {
+            ItemKind::Folder => 0,
+            ItemKind::Document {
+                file_type: FileType::Notebook,
+                ..
+            } => 1,
+            ItemKind::Document {
+                file_type: FileType::Pdf,
+                ..
+            } => 2,
+            ItemKind::Document {
+                file_type: FileType::Epub,
+                ..
+            } => 3,
+            ItemKind::Template => 4,
         }
     }
 }
@@ -590,7 +635,10 @@ mod tests {
         let entry = DocumentEntry {
             uuid: Uuid::new_v4(),
             visible_name: "Test".into(),
-            item_type: ItemType::Document,
+            kind: ItemKind::Document {
+                file_type: FileType::Pdf,
+                page_count: Some(3),
+            },
             parent: Parent::Root,
             deleted: false,
             pinned: false,
@@ -598,23 +646,24 @@ mod tests {
             version: 1,
             tags: vec![],
             last_opened: None,
-            file_type: Some(FileType::Pdf),
-            page_count: Some(3),
         };
         assert!(entry.is_root_child());
         assert!(!entry.is_trashed());
         assert!(entry.is_document());
         assert!(!entry.is_folder());
+        assert_eq!(entry.file_type(), Some(FileType::Pdf));
+        assert_eq!(entry.page_count(), Some(3));
 
         let folder = DocumentEntry {
-            item_type: ItemType::Collection,
+            kind: ItemKind::Folder,
             parent: Parent::Trash,
             deleted: true,
-            file_type: None,
             ..entry.clone()
         };
         assert!(folder.is_folder());
         assert!(folder.is_trashed());
+        assert_eq!(folder.file_type(), None);
+        assert_eq!(folder.page_count(), None);
     }
 
     #[test]
@@ -622,7 +671,7 @@ mod tests {
         let base = DocumentEntry {
             uuid: Uuid::new_v4(),
             visible_name: String::new(),
-            item_type: ItemType::Collection,
+            kind: ItemKind::Folder,
             parent: Parent::Root,
             deleted: false,
             pinned: false,
@@ -630,33 +679,39 @@ mod tests {
             version: 1,
             tags: vec![],
             last_opened: None,
-            file_type: None,
-            page_count: None,
         };
         assert_eq!(base.type_sort_key(), 0); // folder
 
         let notebook = DocumentEntry {
-            item_type: ItemType::Document,
-            file_type: Some(FileType::Notebook),
+            kind: ItemKind::Document {
+                file_type: FileType::Notebook,
+                page_count: None,
+            },
             ..base.clone()
         };
         let pdf = DocumentEntry {
-            file_type: Some(FileType::Pdf),
-            ..notebook.clone()
+            kind: ItemKind::Document {
+                file_type: FileType::Pdf,
+                page_count: None,
+            },
+            ..base.clone()
         };
         let epub = DocumentEntry {
-            file_type: Some(FileType::Epub),
-            ..notebook.clone()
+            kind: ItemKind::Document {
+                file_type: FileType::Epub,
+                page_count: None,
+            },
+            ..base.clone()
         };
-        let unknown = DocumentEntry {
-            file_type: None,
-            ..notebook.clone()
+        let template = DocumentEntry {
+            kind: ItemKind::Template,
+            ..base.clone()
         };
 
         assert!(base.type_sort_key() < notebook.type_sort_key());
         assert!(notebook.type_sort_key() < pdf.type_sort_key());
         assert!(pdf.type_sort_key() < epub.type_sort_key());
-        assert!(epub.type_sort_key() < unknown.type_sort_key());
+        assert!(epub.type_sort_key() < template.type_sort_key());
     }
 
     #[test]

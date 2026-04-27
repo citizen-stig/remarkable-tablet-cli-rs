@@ -1,5 +1,5 @@
 use remarkable_tablet_cli_rs::connection::FakeConnection;
-use remarkable_tablet_cli_rs::metadata::{FileType, ItemType, Parent};
+use remarkable_tablet_cli_rs::metadata::{FileType, Parent};
 use remarkable_tablet_cli_rs::path_resolver::{self, Resolved};
 use remarkable_tablet_cli_rs::tablet::load_all_metadata;
 use remarkable_tablet_cli_rs::tree::{DocumentTree, ListFilter};
@@ -94,7 +94,7 @@ async fn full_pipeline_load_build_resolve() {
         tree.child_entries(&Parent::Folder(Uuid::parse_str(FOLDER_PROJECTS).unwrap()));
     assert_eq!(project_children.len(), 1);
     assert_eq!(project_children[0].visible_name, "Research Paper");
-    assert_eq!(project_children[0].file_type, Some(FileType::Pdf));
+    assert_eq!(project_children[0].file_type(), Some(FileType::Pdf));
 
     // Trash has: Old Draft
     let trash = tree.list_children(&Parent::Trash, ListFilter::all().include_trashed());
@@ -118,7 +118,7 @@ async fn path_resolution_end_to_end() {
     match path_resolver::resolve(&tree, "/Work") {
         Ok(Resolved::Entry(e)) => {
             assert_eq!(e.visible_name, "Work");
-            assert_eq!(e.item_type, ItemType::Collection);
+            assert!(e.is_folder());
         }
         other => panic!("expected Entry(Work), got {other:?}"),
     }
@@ -127,7 +127,7 @@ async fn path_resolution_end_to_end() {
     match path_resolver::resolve(&tree, "/Work/Meeting Notes") {
         Ok(Resolved::Entry(e)) => {
             assert_eq!(e.visible_name, "Meeting Notes");
-            assert_eq!(e.file_type, Some(FileType::Notebook));
+            assert_eq!(e.file_type(), Some(FileType::Notebook));
             assert_eq!(e.tags, vec!["work", "meetings"]);
         }
         other => panic!("expected Entry(Meeting Notes), got {other:?}"),
