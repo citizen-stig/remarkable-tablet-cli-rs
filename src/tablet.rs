@@ -1,3 +1,4 @@
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
@@ -14,10 +15,42 @@ use crate::metadata::{self, DocumentEntry, ItemType};
 /// overwhelming a USB-attached tablet.
 const READ_CONCURRENCY: usize = 16;
 
+/// Tablet IP when reached over the USB Ethernet gadget. Anything else is
+/// assumed to be Wi-Fi for `ConnectionType` reporting.
+const USB_HOST: &str = "10.11.99.1";
+
+/// How the host was reached. Renders as lowercase `"usb"` / `"wifi"` in both
+/// JSON output and human formatting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionType {
+    Usb,
+    Wifi,
+}
+
+impl ConnectionType {
+    pub fn for_host(host: &str) -> Self {
+        if host == USB_HOST {
+            Self::Usb
+        } else {
+            Self::Wifi
+        }
+    }
+}
+
+impl fmt::Display for ConnectionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Usb => f.write_str("usb"),
+            Self::Wifi => f.write_str("wifi"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceInfo {
     pub host: String,
-    pub connection_type: String,
+    pub connection_type: ConnectionType,
     pub firmware_version: String,
     pub battery_percent: u32,
     pub disk_total_mb: u64,
@@ -37,17 +70,13 @@ pub async fn fetch_device_info<C: TabletConnection>(
     )?;
     Ok(DeviceInfo {
         host: host.to_string(),
-        connection_type: connection_type_for(host).to_string(),
+        connection_type: ConnectionType::for_host(host),
         firmware_version,
         battery_percent,
         disk_total_mb,
         disk_used_mb,
         disk_free_mb,
     })
-}
-
-pub fn connection_type_for(host: &str) -> &'static str {
-    if host == "10.11.99.1" { "usb" } else { "wifi" }
 }
 
 async fn fetch_firmware<C: TabletConnection>(conn: &C) -> anyhow::Result<String> {
@@ -208,10 +237,13 @@ async fn load_one<C: TabletConnection>(
     uuid: uuid::Uuid,
 ) -> anyhow::Result<LoadOutcome> {
     let meta_path = format!("{data_dir}/{uuid}.metadata");
-    let meta_bytes = conn
-        .read_file(&meta_path)
-        .await
-        .with_context(|| format!("read {meta_path}"))?;
+    let content_path = format!("{data_dir}/{uuid}.content");
+    // Speculatively fetch `.content` in parallel with `.metadata`. Folders
+    // don't have a content file; the read fails and is discarded. Documents
+    // (the common case) save a full SFTP round-trip per item.
+    let (meta_res, content_res) =
+        tokio::join!(conn.read_file(&meta_path), conn.read_file(&content_path),);
+    let meta_bytes = meta_res.with_context(|| format!("read {meta_path}"))?;
     let raw = match metadata::parse_metadata(&meta_bytes) {
         Ok(m) => m,
         Err(e) => {
@@ -223,13 +255,12 @@ async fn load_one<C: TabletConnection>(
     };
 
     let (file_type, page_count) = if raw.item_type == ItemType::Document {
-        let content_path = format!("{data_dir}/{uuid}.content");
-        match conn.read_file(&content_path).await {
-            Ok(b) => match metadata::parse_content(&b) {
-                Ok(c) => (Some(c.file_type), c.effective_page_count()),
-                Err(_) => (None, None),
-            },
-            Err(_) => (None, None),
+        match content_res
+            .ok()
+            .and_then(|b| metadata::parse_content(&b).ok())
+        {
+            Some(c) => (Some(c.file_type), c.effective_page_count()),
+            None => (None, None),
         }
     } else {
         (None, None)
@@ -292,7 +323,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(info.host, "10.11.99.1");
-        assert_eq!(info.connection_type, "usb");
+        assert_eq!(info.connection_type, ConnectionType::Usb);
         assert_eq!(info.firmware_version, "20230412102300");
         assert_eq!(info.battery_percent, 78);
         assert_eq!(info.disk_total_mb, 6144);
@@ -313,7 +344,7 @@ mod tests {
         let info = fetch_device_info(&conn, "192.168.1.50", "/anywhere")
             .await
             .unwrap();
-        assert_eq!(info.connection_type, "wifi");
+        assert_eq!(info.connection_type, ConnectionType::Wifi);
     }
 
     #[test]

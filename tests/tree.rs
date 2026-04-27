@@ -2,7 +2,7 @@ use remarkable_tablet_cli_rs::connection::FakeConnection;
 use remarkable_tablet_cli_rs::metadata::{FileType, ItemType, Parent};
 use remarkable_tablet_cli_rs::path_resolver::{self, Resolved};
 use remarkable_tablet_cli_rs::tablet::load_all_metadata;
-use remarkable_tablet_cli_rs::tree::DocumentTree;
+use remarkable_tablet_cli_rs::tree::{DocumentTree, ListFilter};
 use uuid::Uuid;
 
 const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
@@ -97,7 +97,13 @@ async fn full_pipeline_load_build_resolve() {
     assert_eq!(project_children[0].file_type, Some(FileType::Pdf));
 
     // Trash has: Old Draft
-    let trash = tree.list_children(&Parent::Trash, true, false, false, None);
+    let trash = tree.list_children(
+        &Parent::Trash,
+        ListFilter {
+            include_trashed: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(trash.len(), 1);
     assert_eq!(trash[0].visible_name, "Old Draft");
 }
@@ -159,7 +165,7 @@ async fn recursive_tree_listing() {
 
     // Full recursive listing from root (excluding trash)
     let all = tree
-        .list_recursive(&Parent::Root, None, false, false, false, None)
+        .list_recursive(&Parent::Root, None, ListFilter::default())
         .unwrap();
     // Work(0), Meeting Notes(1), Projects(1), Research Paper(2), Quick Read(0)
     assert_eq!(all.len(), 5);

@@ -8,7 +8,7 @@ use crate::error::{CliError, Result};
 use crate::metadata::{DocumentEntry, FileType, Parent};
 use crate::output::{self, OutputFormat};
 use crate::path_resolver::{self, Resolved};
-use crate::tree::{self, DocumentTree};
+use crate::tree::{self, DocumentTree, ListFilter};
 
 #[derive(Serialize, Debug)]
 pub struct LsItem {
@@ -115,33 +115,35 @@ fn resolve_target(tree: &DocumentTree, args: &LsArgs) -> anyhow::Result<Target> 
 // ---------------------------------------------------------------------------
 
 fn build_flat(tree: &DocumentTree, target: &Target, args: &LsArgs) -> Vec<LsItem> {
+    let filter = filter_from_args(args);
     let mut items: Vec<_> = tree
-        .list_children(
-            &target.parent,
-            args.include_trashed,
-            args.documents_only,
-            args.folders_only,
-            args.sort.as_ref(),
-        )
+        .list_children(&target.parent, filter)
         .into_iter()
         .map(|e| to_ls_item(tree, e, None))
         .collect();
 
     if args.include_trashed && matches!(target.parent, Parent::Root) {
+        let trash_filter = ListFilter {
+            include_trashed: true,
+            ..filter
+        };
         items.extend(
-            tree.list_children(
-                &Parent::Trash,
-                true,
-                args.documents_only,
-                args.folders_only,
-                args.sort.as_ref(),
-            )
-            .into_iter()
-            .map(|e| to_ls_item(tree, e, None)),
+            tree.list_children(&Parent::Trash, trash_filter)
+                .into_iter()
+                .map(|e| to_ls_item(tree, e, None)),
         );
     }
 
     items
+}
+
+fn filter_from_args(args: &LsArgs) -> ListFilter<'_> {
+    ListFilter {
+        include_trashed: args.include_trashed,
+        documents_only: args.documents_only,
+        folders_only: args.folders_only,
+        sort: args.sort.as_ref(),
+    }
 }
 
 fn to_ls_item(tree: &DocumentTree, e: &DocumentEntry, depth: Option<u32>) -> LsItem {
@@ -191,26 +193,17 @@ fn build_recursive(
     target: &Target,
     args: &LsArgs,
 ) -> anyhow::Result<Vec<LsItem>> {
-    let mut pairs = tree.list_recursive(
-        &target.parent,
-        args.depth,
-        args.include_trashed,
-        args.documents_only,
-        args.folders_only,
-        args.sort.as_ref(),
-    )?;
+    let filter = filter_from_args(args);
+    let mut pairs = tree.list_recursive(&target.parent, args.depth, filter)?;
     // Trashed items live under `Parent::Trash`, which is not a descendant of
     // `Parent::Root`. Walk the trash subtree explicitly when the user asked
     // for it from a root listing.
     if args.include_trashed && matches!(target.parent, Parent::Root) {
-        pairs.extend(tree.list_recursive(
-            &Parent::Trash,
-            args.depth,
-            true,
-            args.documents_only,
-            args.folders_only,
-            args.sort.as_ref(),
-        )?);
+        let trash_filter = ListFilter {
+            include_trashed: true,
+            ..filter
+        };
+        pairs.extend(tree.list_recursive(&Parent::Trash, args.depth, trash_filter)?);
     }
     Ok(pairs
         .into_iter()
@@ -351,27 +344,20 @@ fn print_flat_human(items: &[LsItem]) {
     );
     for row in &rows {
         let extras = &row[3];
-        if extras.is_empty() {
-            println!(
-                "{:<w0$}  {:<w1$}  {:<w2$}",
-                row[0],
-                row[1],
-                row[2],
-                w0 = widths[0],
-                w1 = widths[1],
-                w2 = widths[2],
-            );
+        let extras_suffix = if extras.is_empty() {
+            String::new()
         } else {
-            println!(
-                "{:<w0$}  {:<w1$}  {:<w2$}  {extras}",
-                row[0],
-                row[1],
-                row[2],
-                w0 = widths[0],
-                w1 = widths[1],
-                w2 = widths[2],
-            );
-        }
+            format!("  {extras}")
+        };
+        println!(
+            "{:<w0$}  {:<w1$}  {:<w2$}{extras_suffix}",
+            row[0],
+            row[1],
+            row[2],
+            w0 = widths[0],
+            w1 = widths[1],
+            w2 = widths[2],
+        );
     }
 }
 

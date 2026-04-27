@@ -15,6 +15,17 @@ pub struct DocumentTree {
     children: HashMap<Parent, Vec<Uuid>>,
 }
 
+/// Listing-side filter knobs shared by `list_children` and `list_recursive`.
+/// `documents_only` and `folders_only` are mutually exclusive in practice but
+/// not enforced here — `LsArgs` ensures only one is set at a time.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ListFilter<'a> {
+    pub include_trashed: bool,
+    pub documents_only: bool,
+    pub folders_only: bool,
+    pub sort: Option<&'a SortField>,
+}
+
 impl DocumentTree {
     /// Build a tree from a flat list of document entries.
     pub fn build(entries: Vec<DocumentEntry>) -> Self {
@@ -59,27 +70,20 @@ impl DocumentTree {
     }
 
     /// List children of a folder with filters and sorting applied.
-    pub fn list_children(
-        &self,
-        parent: &Parent,
-        include_trashed: bool,
-        documents_only: bool,
-        folders_only: bool,
-        sort: Option<&SortField>,
-    ) -> Vec<&DocumentEntry> {
+    pub fn list_children(&self, parent: &Parent, filter: ListFilter<'_>) -> Vec<&DocumentEntry> {
         let mut result = self.child_entries(parent);
 
-        if !include_trashed {
+        if !filter.include_trashed {
             result.retain(|e| !e.is_trashed());
         }
-        if documents_only {
+        if filter.documents_only {
             result.retain(|e| e.is_document());
         }
-        if folders_only {
+        if filter.folders_only {
             result.retain(|e| e.is_folder());
         }
 
-        sort_entries(&mut result, sort);
+        sort_entries(&mut result, filter.sort);
         result
     }
 
@@ -93,40 +97,23 @@ impl DocumentTree {
         &self,
         parent: &Parent,
         depth: Option<u32>,
-        include_trashed: bool,
-        documents_only: bool,
-        folders_only: bool,
-        sort: Option<&SortField>,
+        filter: ListFilter<'_>,
     ) -> anyhow::Result<Vec<(u32, &DocumentEntry)>> {
         let mut result = Vec::new();
         let mut ancestors = HashSet::new();
         if let Parent::Folder(uuid) = parent {
             ancestors.insert(*uuid);
         }
-        self.collect_recursive(
-            parent,
-            0,
-            depth,
-            include_trashed,
-            documents_only,
-            folders_only,
-            sort,
-            &mut ancestors,
-            &mut result,
-        )?;
+        self.collect_recursive(parent, 0, depth, filter, &mut ancestors, &mut result)?;
         Ok(result)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn collect_recursive<'a>(
         &'a self,
         parent: &Parent,
         current_depth: u32,
         max_depth: Option<u32>,
-        include_trashed: bool,
-        documents_only: bool,
-        folders_only: bool,
-        sort: Option<&SortField>,
+        filter: ListFilter<'_>,
         ancestors: &mut HashSet<Uuid>,
         result: &mut Vec<(u32, &'a DocumentEntry)>,
     ) -> anyhow::Result<()> {
@@ -137,14 +124,14 @@ impl DocumentTree {
         }
 
         let mut children = self.child_entries(parent);
-        if !include_trashed {
+        if !filter.include_trashed {
             children.retain(|entry| !entry.is_trashed());
         }
-        sort_entries(&mut children, sort);
+        sort_entries(&mut children, filter.sort);
 
         for entry in children {
-            let include_entry =
-                (!documents_only || entry.is_document()) && (!folders_only || entry.is_folder());
+            let include_entry = (!filter.documents_only || entry.is_document())
+                && (!filter.folders_only || entry.is_folder());
             if include_entry {
                 result.push((current_depth, entry));
             }
@@ -159,10 +146,7 @@ impl DocumentTree {
                     &Parent::Folder(entry.uuid),
                     current_depth + 1,
                     max_depth,
-                    include_trashed,
-                    documents_only,
-                    folders_only,
-                    sort,
+                    filter,
                     ancestors,
                     result,
                 )?;
@@ -400,7 +384,13 @@ mod tests {
     #[test]
     fn list_children_documents_only() {
         let tree = DocumentTree::build(sample_entries());
-        let docs = tree.list_children(&Parent::Root, false, true, false, None);
+        let docs = tree.list_children(
+            &Parent::Root,
+            ListFilter {
+                documents_only: true,
+                ..Default::default()
+            },
+        );
         assert!(docs.iter().all(|e| e.is_document()));
         assert_eq!(docs.len(), 2); // Quick Note, Rust Book
     }
@@ -408,7 +398,13 @@ mod tests {
     #[test]
     fn list_children_folders_only() {
         let tree = DocumentTree::build(sample_entries());
-        let folders = tree.list_children(&Parent::Root, false, false, true, None);
+        let folders = tree.list_children(
+            &Parent::Root,
+            ListFilter {
+                folders_only: true,
+                ..Default::default()
+            },
+        );
         assert!(folders.iter().all(|e| e.is_folder()));
         assert_eq!(folders.len(), 2); // Work, Personal
     }
@@ -416,7 +412,7 @@ mod tests {
     #[test]
     fn list_children_default_sort() {
         let tree = DocumentTree::build(sample_entries());
-        let items = tree.list_children(&Parent::Root, false, false, false, None);
+        let items = tree.list_children(&Parent::Root, ListFilter::default());
         let names: Vec<_> = items.iter().map(|e| e.visible_name.as_str()).collect();
         // Default sort: folders first (alpha), then docs (alpha)
         assert_eq!(names, vec!["Personal", "Work", "Quick Note", "Rust Book"]);
@@ -428,10 +424,10 @@ mod tests {
         let folder_uuid = Uuid::parse_str(FOLDER_A).unwrap();
         let items = tree.list_children(
             &Parent::Folder(folder_uuid),
-            false,
-            false,
-            false,
-            Some(&SortField::Modified),
+            ListFilter {
+                sort: Some(&SortField::Modified),
+                ..Default::default()
+            },
         );
         let names: Vec<_> = items.iter().map(|e| e.visible_name.as_str()).collect();
         // Meeting Notes (1710604800000) > Report.pdf (1710500000000)
@@ -441,7 +437,13 @@ mod tests {
     #[test]
     fn list_children_sort_by_type() {
         let tree = DocumentTree::build(sample_entries());
-        let items = tree.list_children(&Parent::Root, false, false, false, Some(&SortField::Type));
+        let items = tree.list_children(
+            &Parent::Root,
+            ListFilter {
+                sort: Some(&SortField::Type),
+                ..Default::default()
+            },
+        );
         let names: Vec<_> = items.iter().map(|e| e.visible_name.as_str()).collect();
         // folders (Personal, Work) → notebook (Quick Note) → epub (Rust Book)
         assert_eq!(names, vec!["Personal", "Work", "Quick Note", "Rust Book"]);
@@ -451,7 +453,7 @@ mod tests {
     fn list_recursive_unlimited() {
         let tree = DocumentTree::build(sample_entries());
         let items = tree
-            .list_recursive(&Parent::Root, None, false, false, false, None)
+            .list_recursive(&Parent::Root, None, ListFilter::default())
             .unwrap();
         // Root items + children of Work and Personal
         // Work (0), Meeting Notes (1), Report.pdf (1), Personal (0), Quick Note (0), Rust Book (0)
@@ -469,7 +471,7 @@ mod tests {
     fn list_recursive_depth_1() {
         let tree = DocumentTree::build(sample_entries());
         let items = tree
-            .list_recursive(&Parent::Root, Some(1), false, false, false, None)
+            .list_recursive(&Parent::Root, Some(1), ListFilter::default())
             .unwrap();
         // Only root-level items, no descent into folders
         assert_eq!(items.len(), 4);
@@ -480,7 +482,7 @@ mod tests {
     fn list_recursive_depth_2() {
         let tree = DocumentTree::build(sample_entries());
         let items = tree
-            .list_recursive(&Parent::Root, Some(2), false, false, false, None)
+            .list_recursive(&Parent::Root, Some(2), ListFilter::default())
             .unwrap();
         // Root-level + one level deep
         assert_eq!(items.len(), 6);
@@ -490,7 +492,14 @@ mod tests {
     fn list_recursive_documents_only_includes_nested_documents() {
         let tree = DocumentTree::build(nested_document_entries());
         let items = tree
-            .list_recursive(&Parent::Root, None, false, true, false, None)
+            .list_recursive(
+                &Parent::Root,
+                None,
+                ListFilter {
+                    documents_only: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
         let path_order: Vec<_> = items
@@ -516,14 +525,7 @@ mod tests {
         )]);
 
         let err = tree
-            .list_recursive(
-                &Parent::Folder(folder_uuid),
-                None,
-                false,
-                false,
-                false,
-                None,
-            )
+            .list_recursive(&Parent::Folder(folder_uuid), None, ListFilter::default())
             .unwrap_err();
 
         assert!(err.to_string().contains("cycle detected"));
@@ -551,14 +553,7 @@ mod tests {
         ]);
 
         let err = tree
-            .list_recursive(
-                &Parent::Folder(folder_a_uuid),
-                None,
-                false,
-                false,
-                false,
-                None,
-            )
+            .list_recursive(&Parent::Folder(folder_a_uuid), None, ListFilter::default())
             .unwrap_err();
 
         assert!(err.to_string().contains("cycle detected"));
@@ -567,7 +562,7 @@ mod tests {
     #[test]
     fn list_trashed_excluded_by_default() {
         let tree = DocumentTree::build(sample_entries());
-        let all = tree.list_children(&Parent::Trash, false, false, false, None);
+        let all = tree.list_children(&Parent::Trash, ListFilter::default());
         // Trashed items are excluded when include_trashed=false, but we're
         // listing the Trash parent directly — children of Trash are inherently
         // trashed, so they get filtered out.
@@ -577,7 +572,13 @@ mod tests {
     #[test]
     fn list_trashed_included() {
         let tree = DocumentTree::build(sample_entries());
-        let all = tree.list_children(&Parent::Trash, true, false, false, None);
+        let all = tree.list_children(
+            &Parent::Trash,
+            ListFilter {
+                include_trashed: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].visible_name, "Old Draft");
     }

@@ -1,5 +1,5 @@
 use remarkable_tablet_cli_rs::connection::FakeConnection;
-use remarkable_tablet_cli_rs::tablet::fetch_device_info;
+use remarkable_tablet_cli_rs::tablet::{ConnectionType, fetch_device_info};
 
 #[tokio::test]
 async fn reports_device_info_over_fake_connection() {
@@ -22,7 +22,7 @@ async fn reports_device_info_over_fake_connection() {
     .expect("fetch_device_info succeeds");
 
     assert_eq!(info.host, "10.11.99.1");
-    assert_eq!(info.connection_type, "usb");
+    assert_eq!(info.connection_type, ConnectionType::Usb);
     assert_eq!(info.firmware_version, "20230412102300");
     assert_eq!(info.battery_percent, 82);
     assert_eq!(info.disk_total_mb, 6144);
