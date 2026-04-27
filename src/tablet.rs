@@ -115,6 +115,17 @@ async fn fetch_disk<C: TabletConnection>(
     Ok((total_k / 1024, used_k / 1024, free_k / 1024))
 }
 
+/// Diagnostic summary of a [`load_all_metadata_full`] run.
+#[derive(Debug, Default)]
+pub struct LoadDiagnostics {
+    /// Total filenames returned by `list_dir(data_dir)`.
+    pub dir_entry_count: usize,
+    /// Of those, how many matched the `<uuid>.metadata` shape.
+    pub uuid_metadata_count: usize,
+    /// `(filename, error)` for `.metadata` files that failed to parse.
+    pub parse_failures: Vec<(String, String)>,
+}
+
 /// Load all document/folder metadata from the tablet's xochitl data directory.
 ///
 /// Entries that fail to parse are silently skipped so one corrupt file
@@ -124,15 +135,29 @@ pub async fn load_all_metadata<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
 ) -> anyhow::Result<Vec<DocumentEntry>> {
+    Ok(load_all_metadata_full(conn, data_dir).await?.0)
+}
+
+/// Same as [`load_all_metadata`] but also returns counters and per-file
+/// parse errors for diagnostics. Use this when you want to surface why a
+/// listing came up empty.
+pub async fn load_all_metadata_full<C: TabletConnection>(
+    conn: &C,
+    data_dir: &str,
+) -> anyhow::Result<(Vec<DocumentEntry>, LoadDiagnostics)> {
+    let mut diag = LoadDiagnostics::default();
+
     let dir_entries = conn
         .list_dir(data_dir)
         .await
         .with_context(|| format!("list {data_dir}"))?;
+    diag.dir_entry_count = dir_entries.len();
 
     let uuids: Vec<_> = dir_entries
         .iter()
         .filter_map(|name| metadata::extract_uuid(name))
         .collect();
+    diag.uuid_metadata_count = uuids.len();
 
     let mut result = Vec::with_capacity(uuids.len());
 
@@ -144,17 +169,24 @@ pub async fn load_all_metadata<C: TabletConnection>(
             .with_context(|| format!("read {meta_path}"))?;
         let raw = match metadata::parse_metadata(&meta_bytes) {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(e) => {
+                diag.parse_failures
+                    .push((format!("{uuid}.metadata"), e.to_string()));
+                continue;
+            }
         };
 
-        let file_type = if raw.item_type == ItemType::Document {
+        let (file_type, page_count) = if raw.item_type == ItemType::Document {
             let content_path = format!("{data_dir}/{uuid}.content");
             match conn.read_file(&content_path).await {
-                Ok(b) => metadata::parse_content(&b).ok().map(|c| c.file_type),
-                Err(_) => None,
+                Ok(b) => match metadata::parse_content(&b) {
+                    Ok(c) => (Some(c.file_type), c.effective_page_count()),
+                    Err(_) => (None, None),
+                },
+                Err(_) => (None, None),
             }
         } else {
-            None
+            (None, None)
         };
 
         result.push(DocumentEntry {
@@ -169,10 +201,11 @@ pub async fn load_all_metadata<C: TabletConnection>(
             tags: raw.tags,
             last_opened: raw.last_opened,
             file_type,
+            page_count,
         });
     }
 
-    Ok(result)
+    Ok((result, diag))
 }
 
 fn shell_single_quote(s: &str) -> String {
@@ -274,7 +307,7 @@ mod tests {
             doc_uuid,
             r#"{"visibleName":"Notes","type":"DocumentType","parent":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","deleted":false,"pinned":false,"lastModified":1710604800000,"metadatamodified":1710604800000,"version":1,"tags":["work"]}"#,
         );
-        set_content(&conn, doc_uuid, r#"{"fileType":"notebook"}"#);
+        set_content(&conn, doc_uuid, r#"{"fileType":"notebook","pageCount":7}"#);
 
         let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
         assert_eq!(entries.len(), 2);
@@ -283,6 +316,7 @@ mod tests {
         assert_eq!(folder.item_type, ItemType::Collection);
         assert_eq!(folder.parent, Parent::Root);
         assert!(folder.file_type.is_none());
+        assert_eq!(folder.page_count, None);
 
         let doc = entries.iter().find(|e| e.visible_name == "Notes").unwrap();
         assert_eq!(doc.item_type, ItemType::Document);
@@ -292,6 +326,28 @@ mod tests {
         );
         assert_eq!(doc.file_type, Some(FileType::Notebook));
         assert_eq!(doc.tags, vec!["work"]);
+        assert_eq!(doc.page_count, Some(7));
+    }
+
+    #[tokio::test]
+    async fn load_metadata_page_count_from_pages_array() {
+        let conn = FakeConnection::new();
+        conn.mkdir(DATA_DIR);
+        let doc_uuid = "11111111-2222-3333-4444-555555555555";
+
+        set_metadata(
+            &conn,
+            doc_uuid,
+            r#"{"visibleName":"Old","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710604800000,"metadatamodified":1710604800000,"version":1}"#,
+        );
+        set_content(
+            &conn,
+            doc_uuid,
+            r#"{"fileType":"notebook","pages":["a","b","c","d"]}"#,
+        );
+
+        let entries = load_all_metadata(&conn, DATA_DIR).await.unwrap();
+        assert_eq!(entries[0].page_count, Some(4));
     }
 
     #[tokio::test]

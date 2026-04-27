@@ -33,6 +33,7 @@ fn fixture_doc_in_folder() {
 
     let c = metadata::parse_content(content).unwrap();
     assert_eq!(c.file_type, FileType::Notebook);
+    assert_eq!(c.effective_page_count(), Some(12));
 }
 
 #[test]
@@ -47,6 +48,7 @@ fn fixture_doc_trashed() {
 
     let c = metadata::parse_content(content).unwrap();
     assert_eq!(c.file_type, FileType::Pdf);
+    assert_eq!(c.effective_page_count(), Some(3));
 }
 
 #[test]
@@ -71,4 +73,5 @@ fn fixture_doc_epub() {
 
     let c = metadata::parse_content(content).unwrap();
     assert_eq!(c.file_type, FileType::Epub);
+    assert_eq!(c.effective_page_count(), Some(412));
 }

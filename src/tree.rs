@@ -174,7 +174,7 @@ impl DocumentTree {
     }
 }
 
-fn sort_entries(entries: &mut [&DocumentEntry], sort: Option<&SortField>) {
+pub fn sort_entries(entries: &mut [&DocumentEntry], sort: Option<&SortField>) {
     match sort {
         Some(SortField::Name) | None => {
             entries.sort_by(|a, b| {
@@ -230,6 +230,7 @@ mod tests {
             tags: vec![],
             last_opened: None,
             file_type,
+            page_count: None,
         }
     }
 

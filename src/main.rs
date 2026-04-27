@@ -10,9 +10,9 @@ async fn main() {
 
     let result = match &cli.command {
         Command::Connect => commands::connect::execute(&cli.global).await,
-        Command::Ls(args) => commands::ls::execute(&cli.global, args),
-        Command::Info(args) => commands::info::execute(&cli.global, args),
-        Command::Find(args) => commands::find::execute(&cli.global, args),
+        Command::Ls(args) => commands::ls::execute(&cli.global, args).await,
+        Command::Info(args) => commands::info::execute(&cli.global, args).await,
+        Command::Find(args) => commands::find::execute(&cli.global, args).await,
         Command::Backup(args) => commands::backup::execute(&cli.global, args),
         Command::Download(args) => commands::download::execute(&cli.global, args),
         Command::Upload(args) => commands::upload::execute(&cli.global, args),

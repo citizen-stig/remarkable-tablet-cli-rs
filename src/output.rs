@@ -12,7 +12,7 @@ pub enum OutputFormat {
     Json,
 }
 
-pub fn print_json(value: &impl Serialize) {
+pub fn print_json<T: Serialize + ?Sized>(value: &T) {
     println!(
         "{}",
         serde_json::to_string(value).expect("failed to serialize JSON")

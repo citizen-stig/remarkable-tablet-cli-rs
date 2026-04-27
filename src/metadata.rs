@@ -13,6 +13,8 @@ pub enum ItemType {
     Document,
     #[serde(rename = "CollectionType")]
     Collection,
+    #[serde(rename = "TemplateType")]
+    Template,
 }
 
 /// The file format of a document.
@@ -60,10 +62,44 @@ impl<'de> Deserialize<'de> for Parent {
 // Timestamp serde helpers
 // ---------------------------------------------------------------------------
 
+/// Coerce a JSON value into epoch-ms. reMarkable firmware emits timestamps
+/// inconsistently across versions: older builds use JSON numbers, newer
+/// ones wrap them in strings, some files use floats, and a few use `null`
+/// or even `true`/`false` as a "not set" placeholder. Returns `None` when
+/// the value carries no usable timestamp (null/bool/empty string).
+fn json_value_to_epoch_ms<E: serde::de::Error>(v: serde_json::Value) -> Result<Option<i64>, E> {
+    use serde_json::Value;
+    match v {
+        Value::Null | Value::Bool(_) => Ok(None),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(Some(i))
+            } else if let Some(f) = n.as_f64() {
+                Ok(Some(f as i64))
+            } else {
+                Err(E::custom(format!("unrepresentable number {n}")))
+            }
+        }
+        Value::String(s) => {
+            if s.is_empty() {
+                Ok(None)
+            } else {
+                s.parse::<i64>()
+                    .map(Some)
+                    .map_err(|e| E::custom(format!("expected i64 in string, got {s:?}: {e}")))
+            }
+        }
+        other => Err(E::custom(format!(
+            "unexpected JSON type for timestamp: {other:?}"
+        ))),
+    }
+}
+
 fn deserialize_epoch_ms<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<DateTime<Utc>, D::Error> {
-    let ms = i64::deserialize(deserializer)?;
+    let v = serde_json::Value::deserialize(deserializer)?;
+    let ms = json_value_to_epoch_ms::<D::Error>(v)?.unwrap_or(0);
     Utc.timestamp_millis_opt(ms)
         .single()
         .ok_or_else(|| serde::de::Error::custom(format!("invalid epoch ms: {ms}")))
@@ -76,8 +112,8 @@ fn serialize_epoch_ms<S: Serializer>(dt: &DateTime<Utc>, serializer: S) -> Resul
 fn deserialize_option_epoch_ms<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<DateTime<Utc>>, D::Error> {
-    let ms: Option<i64> = Option::deserialize(deserializer)?;
-    match ms {
+    let v = serde_json::Value::deserialize(deserializer)?;
+    match json_value_to_epoch_ms::<D::Error>(v)? {
         None => Ok(None),
         Some(ms) => Utc
             .timestamp_millis_opt(ms)
@@ -85,6 +121,14 @@ fn deserialize_option_epoch_ms<'de, D: Deserializer<'de>>(
             .map(Some)
             .ok_or_else(|| serde::de::Error::custom(format!("invalid epoch ms: {ms}"))),
     }
+}
+
+fn epoch_zero() -> DateTime<Utc> {
+    Utc.timestamp_millis_opt(0).single().expect("epoch zero")
+}
+
+fn default_parent_root() -> Parent {
+    Parent::Root
 }
 
 fn serialize_option_epoch_ms<S: Serializer>(
@@ -102,26 +146,37 @@ fn serialize_option_epoch_ms<S: Serializer>(
 // ---------------------------------------------------------------------------
 
 /// Raw `.metadata` JSON as stored on the tablet.
+///
+/// reMarkable's metadata schema has drifted across firmware versions —
+/// fields come and go, types switch (numbers vs strings), and a third
+/// `TemplateType` item kind appeared. Most fields here have defaults so
+/// older or unfamiliar files still parse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawMetadata {
     pub visible_name: String,
     #[serde(rename = "type")]
     pub item_type: ItemType,
+    #[serde(default = "default_parent_root")]
     pub parent: Parent,
+    #[serde(default)]
     pub deleted: bool,
+    #[serde(default)]
     pub pinned: bool,
     #[serde(
+        default = "epoch_zero",
         deserialize_with = "deserialize_epoch_ms",
         serialize_with = "serialize_epoch_ms"
     )]
     pub last_modified: DateTime<Utc>,
     #[serde(
+        default,
         rename = "metadatamodified",
-        deserialize_with = "deserialize_epoch_ms",
-        serialize_with = "serialize_epoch_ms"
+        deserialize_with = "deserialize_option_epoch_ms",
+        serialize_with = "serialize_option_epoch_ms"
     )]
-    pub metadata_modified: DateTime<Utc>,
+    pub metadata_modified: Option<DateTime<Utc>>,
+    #[serde(default)]
     pub version: u32,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -134,10 +189,27 @@ pub struct RawMetadata {
 }
 
 /// Raw `.content` JSON as stored on the tablet.
+///
+/// `page_count` is read directly from `pageCount` when present (newer schemas);
+/// `pages` is captured opaquely so older schemas without `pageCount` can fall
+/// back to its array length.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawContent {
     pub file_type: FileType,
+    #[serde(default)]
+    pub page_count: Option<u32>,
+    #[serde(default)]
+    pub pages: Option<Vec<serde_json::Value>>,
+}
+
+impl RawContent {
+    /// Best-effort page count: prefer the explicit `pageCount` field; fall
+    /// back to the length of the `pages` array; otherwise `None`.
+    pub fn effective_page_count(&self) -> Option<u32> {
+        self.page_count
+            .or_else(|| self.pages.as_ref().map(|p| p.len() as u32))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +233,7 @@ pub struct DocumentEntry {
     #[serde(serialize_with = "serialize_option_epoch_ms")]
     pub last_opened: Option<DateTime<Utc>>,
     pub file_type: Option<FileType>,
+    pub page_count: Option<u32>,
 }
 
 impl DocumentEntry {
@@ -180,7 +253,11 @@ impl DocumentEntry {
         self.item_type == ItemType::Document
     }
 
-    /// Sort key for ordering by type: folders < notebooks < PDFs < ePubs < unknown.
+    pub fn is_template(&self) -> bool {
+        self.item_type == ItemType::Template
+    }
+
+    /// Sort key for ordering by type: folders < notebooks < PDFs < ePubs < unknown < templates.
     pub fn type_sort_key(&self) -> u8 {
         match (self.item_type, self.file_type) {
             (ItemType::Collection, _) => 0,
@@ -188,6 +265,7 @@ impl DocumentEntry {
             (ItemType::Document, Some(FileType::Pdf)) => 2,
             (ItemType::Document, Some(FileType::Epub)) => 3,
             (ItemType::Document, None) => 4,
+            (ItemType::Template, _) => 5,
         }
     }
 }
@@ -310,10 +388,109 @@ mod tests {
         assert!(!m.deleted);
         assert!(m.pinned);
         assert_eq!(m.last_modified.timestamp_millis(), 1710518400000);
-        assert_eq!(m.metadata_modified.timestamp_millis(), 1710518400000);
+        assert_eq!(
+            m.metadata_modified.unwrap().timestamp_millis(),
+            1710518400000
+        );
         assert_eq!(m.version, 1);
         assert_eq!(m.tags, vec!["work", "meetings"]);
         assert_eq!(m.last_opened.unwrap().timestamp_millis(), 1710604800000);
+    }
+
+    #[test]
+    fn parse_metadata_with_string_encoded_timestamps() {
+        // Newer reMarkable firmware writes timestamps as JSON strings.
+        let json = r#"{
+            "visibleName": "Stringy",
+            "type": "DocumentType",
+            "parent": "",
+            "deleted": false,
+            "pinned": false,
+            "lastModified": "1742725761861",
+            "metadatamodified": "1742725761862",
+            "version": 1,
+            "lastOpened": "1742725999999"
+        }"#;
+        let m = parse_metadata(json.as_bytes()).unwrap();
+        assert_eq!(m.last_modified.timestamp_millis(), 1742725761861);
+        assert_eq!(
+            m.metadata_modified.unwrap().timestamp_millis(),
+            1742725761862
+        );
+        assert_eq!(m.last_opened.unwrap().timestamp_millis(), 1742725999999);
+    }
+
+    #[test]
+    fn parse_metadata_tolerates_missing_optional_fields() {
+        // Newer firmware can omit `deleted`, `pinned`, `version`, and even
+        // timestamp fields. Make sure we don't blow up.
+        let json = r#"{
+            "visibleName": "Quirky",
+            "type": "DocumentType",
+            "parent": "",
+            "lastModified": null,
+            "metadatamodified": null,
+            "lastOpened": null
+        }"#;
+        let m = parse_metadata(json.as_bytes()).unwrap();
+        assert_eq!(m.visible_name, "Quirky");
+        assert!(!m.deleted);
+        assert!(!m.pinned);
+        assert_eq!(m.version, 0);
+        assert_eq!(m.last_modified.timestamp_millis(), 0);
+        assert!(m.metadata_modified.is_none());
+        assert!(m.last_opened.is_none());
+    }
+
+    #[test]
+    fn parse_metadata_template_type() {
+        let json = r#"{
+            "visibleName": "Quad Grid",
+            "type": "TemplateType",
+            "parent": "",
+            "deleted": false,
+            "pinned": false,
+            "lastModified": 1710000000000,
+            "metadatamodified": 1710000000000,
+            "version": 1
+        }"#;
+        let m = parse_metadata(json.as_bytes()).unwrap();
+        assert_eq!(m.item_type, ItemType::Template);
+    }
+
+    #[test]
+    fn parse_metadata_boolean_timestamp_treated_as_unset() {
+        // Some firmware writes `false`/`true` as a "not-set" placeholder for
+        // optional timestamps. Treat the same as null.
+        let json = r#"{
+            "visibleName": "Booly",
+            "type": "DocumentType",
+            "parent": "",
+            "deleted": false,
+            "pinned": false,
+            "lastModified": false,
+            "metadatamodified": true,
+            "version": 1
+        }"#;
+        let m = parse_metadata(json.as_bytes()).unwrap();
+        assert_eq!(m.last_modified.timestamp_millis(), 0);
+        assert!(m.metadata_modified.is_none());
+    }
+
+    #[test]
+    fn parse_metadata_float_timestamp() {
+        let json = r#"{
+            "visibleName": "Floaty",
+            "type": "DocumentType",
+            "parent": "",
+            "deleted": false,
+            "pinned": false,
+            "lastModified": 1.742725761861e12,
+            "metadatamodified": 1742725761861,
+            "version": 1
+        }"#;
+        let m = parse_metadata(json.as_bytes()).unwrap();
+        assert_eq!(m.last_modified.timestamp_millis(), 1742725761861);
     }
 
     #[test]
@@ -340,6 +517,7 @@ mod tests {
         let json = r#"{"fileType": "pdf"}"#;
         let c = parse_content(json.as_bytes()).unwrap();
         assert_eq!(c.file_type, FileType::Pdf);
+        assert_eq!(c.effective_page_count(), None);
     }
 
     #[test]
@@ -347,6 +525,29 @@ mod tests {
         let json = r#"{"fileType": "notebook"}"#;
         let c = parse_content(json.as_bytes()).unwrap();
         assert_eq!(c.file_type, FileType::Notebook);
+    }
+
+    #[test]
+    fn parse_content_page_count_explicit() {
+        let json = r#"{"fileType": "notebook", "pageCount": 5}"#;
+        let c = parse_content(json.as_bytes()).unwrap();
+        assert_eq!(c.page_count, Some(5));
+        assert_eq!(c.effective_page_count(), Some(5));
+    }
+
+    #[test]
+    fn parse_content_page_count_falls_back_to_pages_len() {
+        let json = r#"{"fileType": "notebook", "pages": ["a","b","c"]}"#;
+        let c = parse_content(json.as_bytes()).unwrap();
+        assert_eq!(c.page_count, None);
+        assert_eq!(c.effective_page_count(), Some(3));
+    }
+
+    #[test]
+    fn parse_content_explicit_page_count_wins_over_pages() {
+        let json = r#"{"fileType": "notebook", "pageCount": 10, "pages": ["a","b","c"]}"#;
+        let c = parse_content(json.as_bytes()).unwrap();
+        assert_eq!(c.effective_page_count(), Some(10));
     }
 
     #[test]
@@ -384,6 +585,7 @@ mod tests {
             tags: vec![],
             last_opened: None,
             file_type: Some(FileType::Pdf),
+            page_count: Some(3),
         };
         assert!(entry.is_root_child());
         assert!(!entry.is_trashed());
@@ -415,6 +617,7 @@ mod tests {
             tags: vec![],
             last_opened: None,
             file_type: None,
+            page_count: None,
         };
         assert_eq!(base.type_sort_key(), 0); // folder
 

@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod common;
 pub mod connect;
 pub mod download;
 pub mod find;

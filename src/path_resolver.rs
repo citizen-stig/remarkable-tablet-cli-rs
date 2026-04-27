@@ -168,6 +168,7 @@ mod tests {
             tags: vec![],
             last_opened: None,
             file_type,
+            page_count: None,
         }
     }
 
