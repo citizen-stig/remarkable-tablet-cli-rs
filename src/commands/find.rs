@@ -3,12 +3,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::cli::{FindArgs, FindTypeFilter, GlobalOptions};
-use crate::commands::common;
-use crate::commands::ls::ItemKind;
+use crate::commands::common::{self, ItemKind};
 use crate::error::{CliError, Result};
-use crate::metadata::{DocumentEntry, FileType, Parent};
+use crate::metadata::{DocumentEntry, FileType};
 use crate::output::{self, OutputFormat};
-use crate::path_resolver;
 use crate::tree::DocumentTree;
 
 #[derive(Serialize, Debug)]
@@ -56,19 +54,13 @@ pub fn run_with_tree(tree: &DocumentTree, args: &FindArgs) -> anyhow::Result<Vec
 }
 
 fn to_find_item(tree: &DocumentTree, e: &DocumentEntry) -> FindItem {
-    let parent_uuid = match &e.parent {
-        Parent::Folder(u) => Some(*u),
-        Parent::Root | Parent::Trash => None,
-    };
-    let path = path_resolver::resolve_uuid_to_path(tree, &e.uuid)
-        .unwrap_or_else(|_| format!("/{}", e.visible_name));
     FindItem {
         uuid: e.uuid,
         name: e.visible_name.clone(),
-        path,
+        path: common::entry_path(tree, e),
         kind: e.item_type.into(),
         file_type: e.file_type,
-        parent_uuid,
+        parent_uuid: e.parent_uuid(),
     }
 }
 
@@ -147,14 +139,11 @@ fn print_human(items: &[FindItem]) {
         return;
     }
     for item in items {
-        let type_label = match (item.kind, item.file_type) {
-            (ItemKind::Folder, _) => "folder",
-            (ItemKind::Document, Some(FileType::Pdf)) => "pdf",
-            (ItemKind::Document, Some(FileType::Epub)) => "epub",
-            (ItemKind::Document, Some(FileType::Notebook)) => "notebook",
-            (ItemKind::Document, None) => "document",
-            (ItemKind::Template, _) => "template",
-        };
-        println!("{}  [{}]  {}", item.path, type_label, item.uuid);
+        println!(
+            "{}  [{}]  {}",
+            item.path,
+            common::type_label(item.kind, item.file_type),
+            item.uuid,
+        );
     }
 }

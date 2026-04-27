@@ -1,5 +1,5 @@
 use remarkable_tablet_cli_rs::cli::{FindArgs, FindTypeFilter, InfoArgs, LsArgs, SortField};
-use remarkable_tablet_cli_rs::commands::{find, info, ls};
+use remarkable_tablet_cli_rs::commands::{common, find, info, ls};
 use remarkable_tablet_cli_rs::connection::FakeConnection;
 use remarkable_tablet_cli_rs::error::CliError;
 use remarkable_tablet_cli_rs::metadata::FileType;
@@ -269,12 +269,12 @@ async fn ls_populates_page_count_and_children_count() {
     let tree = build_tree(&conn).await;
     let items = flat(ls::run_with_tree(&tree, &ls_args()).unwrap());
     let work = items.iter().find(|i| i.name == "Work").unwrap();
-    assert_eq!(work.kind, ls::ItemKind::Folder);
+    assert_eq!(work.kind, common::ItemKind::Folder);
     assert_eq!(work.children_count, Some(2));
     assert_eq!(work.page_count, None);
 
     let quick = items.iter().find(|i| i.name == "Quick Read").unwrap();
-    assert_eq!(quick.kind, ls::ItemKind::Document);
+    assert_eq!(quick.kind, common::ItemKind::Document);
     assert_eq!(quick.file_type, Some(FileType::Epub));
     assert_eq!(quick.page_count, Some(300));
     assert!(quick.pinned);
@@ -384,7 +384,7 @@ async fn info_returns_metadata_and_content() {
     assert_eq!(out.uuid, Uuid::parse_str(DOC_NOTES).unwrap());
     assert_eq!(out.path, "/Work/Meeting Notes");
     assert_eq!(out.name, "Meeting Notes");
-    assert_eq!(out.kind, ls::ItemKind::Document);
+    assert_eq!(out.kind, common::ItemKind::Document);
     assert_eq!(out.file_type, Some(FileType::Notebook));
     assert_eq!(out.tags, vec!["work", "meetings"]);
     let content = out.content.as_ref().unwrap();
@@ -481,12 +481,14 @@ async fn info_document_without_content_yields_null_content() {
 }
 
 #[tokio::test]
-async fn info_document_content_read_failure_propagates() {
+async fn info_document_content_read_failure_yields_none() {
+    // Aligned with `tablet::load_one`: a `.content` read that fails for any
+    // reason is absorbed into `content: None` rather than aborting `info`.
     let conn = setup_fake_tablet();
     let tree = build_tree(&conn).await;
     let path = format!("{DATA_DIR}/{DOC_PAPER}.content");
     conn.set_read_error(&path, "permission denied");
-    let err = info::run_with_conn(
+    let out = info::run_with_conn(
         &conn,
         DATA_DIR,
         &tree,
@@ -495,8 +497,8 @@ async fn info_document_content_read_failure_propagates() {
         },
     )
     .await
-    .unwrap_err();
-    assert!(err.to_string().contains("permission denied"));
+    .unwrap();
+    assert!(out.content.is_none());
 }
 
 #[tokio::test]
@@ -513,7 +515,7 @@ async fn info_folder_returns_no_content() {
     )
     .await
     .unwrap();
-    assert_eq!(out.kind, ls::ItemKind::Folder);
+    assert_eq!(out.kind, common::ItemKind::Folder);
     assert!(out.content.is_none());
 }
 

@@ -6,7 +6,13 @@ use uuid::Uuid;
 // Enums
 // ---------------------------------------------------------------------------
 
-/// The type of item on the tablet.
+/// On-disk item type, matching the tablet's `.metadata` JSON exactly:
+/// `"DocumentType"`, `"CollectionType"`, `"TemplateType"`. Use this for
+/// anything that round-trips through xochitl's filesystem.
+///
+/// Not for CLI output — the JSON output schema uses a lowercase, renamed
+/// projection (`folder`/`document`/`template`); see
+/// [`crate::commands::common::ItemKind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ItemType {
     #[serde(rename = "DocumentType")]
@@ -255,6 +261,14 @@ impl DocumentEntry {
 
     pub fn is_template(&self) -> bool {
         self.item_type == ItemType::Template
+    }
+
+    /// UUID of the parent folder, or `None` for root-level and trashed items.
+    pub fn parent_uuid(&self) -> Option<Uuid> {
+        match self.parent {
+            Parent::Folder(u) => Some(u),
+            Parent::Root | Parent::Trash => None,
+        }
     }
 
     /// Sort key for ordering by type: folders < notebooks < PDFs < ePubs < unknown < templates.

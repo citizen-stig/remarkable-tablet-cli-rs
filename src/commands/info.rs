@@ -2,8 +2,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::cli::{GlobalOptions, InfoArgs};
-use crate::commands::common;
-use crate::commands::ls::ItemKind;
+use crate::commands::common::{self, ItemKind};
 use crate::connection::TabletConnection;
 use crate::error::{CliError, Result};
 use crate::metadata::FileType;
@@ -69,13 +68,14 @@ pub async fn run_with_conn<C: TabletConnection>(
     let metadata_bytes = conn.read_file(&metadata_path).await?;
     let metadata: serde_json::Value = serde_json::from_slice(&metadata_bytes)?;
 
+    // A single SFTP read; missing/unreadable `.content` is treated as `None`,
+    // matching `tablet::load_one`. This drops a redundant `try_exists`
+    // round-trip on the listing path.
     let content = if entry.is_document() {
         let content_path = format!("{data_dir}/{}.content", entry.uuid);
-        if conn.file_exists(&content_path).await? {
-            let bytes = conn.read_file(&content_path).await?;
-            Some(serde_json::from_slice::<serde_json::Value>(&bytes)?)
-        } else {
-            None
+        match conn.read_file(&content_path).await {
+            Ok(bytes) => Some(serde_json::from_slice::<serde_json::Value>(&bytes)?),
+            Err(_) => None,
         }
     } else {
         None
@@ -106,23 +106,9 @@ fn print_human(info: &InfoOutput) {
     println!("uuid:      {}", info.uuid);
     println!("path:      {}", info.path);
     println!("name:      {}", info.name);
-    println!(
-        "type:      {}",
-        match info.kind {
-            ItemKind::Folder => "folder",
-            ItemKind::Document => "document",
-            ItemKind::Template => "template",
-        }
-    );
+    println!("type:      {}", common::type_label(info.kind, None));
     if let Some(ft) = info.file_type {
-        println!(
-            "file_type: {}",
-            match ft {
-                FileType::Pdf => "pdf",
-                FileType::Epub => "epub",
-                FileType::Notebook => "notebook",
-            }
-        );
+        println!("file_type: {}", common::file_type_label(ft));
     }
     if info.pinned {
         println!("pinned:    true");

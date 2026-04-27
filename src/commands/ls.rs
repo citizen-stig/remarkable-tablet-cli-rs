@@ -3,30 +3,12 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::cli::{GlobalOptions, LsArgs};
-use crate::commands::common;
+use crate::commands::common::{self, ItemKind};
 use crate::error::{CliError, Result};
-use crate::metadata::{DocumentEntry, FileType, ItemType, Parent};
+use crate::metadata::{DocumentEntry, FileType, Parent};
 use crate::output::{self, OutputFormat};
 use crate::path_resolver::{self, Resolved};
 use crate::tree::{self, DocumentTree};
-
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ItemKind {
-    Folder,
-    Document,
-    Template,
-}
-
-impl From<ItemType> for ItemKind {
-    fn from(t: ItemType) -> Self {
-        match t {
-            ItemType::Collection => ItemKind::Folder,
-            ItemType::Document => ItemKind::Document,
-            ItemType::Template => ItemKind::Template,
-        }
-    }
-}
 
 #[derive(Serialize, Debug)]
 pub struct LsItem {
@@ -163,12 +145,6 @@ fn build_flat(tree: &DocumentTree, target: &Target, args: &LsArgs) -> Vec<LsItem
 }
 
 fn to_ls_item(tree: &DocumentTree, e: &DocumentEntry, depth: Option<u32>) -> LsItem {
-    let parent_uuid = match &e.parent {
-        Parent::Folder(u) => Some(*u),
-        Parent::Root | Parent::Trash => None,
-    };
-    let path = path_resolver::resolve_uuid_to_path(tree, &e.uuid)
-        .unwrap_or_else(|_| format!("/{}", e.visible_name));
     let children_count = if e.is_folder() {
         Some(tree.children_count(&Parent::Folder(e.uuid)))
     } else {
@@ -179,8 +155,8 @@ fn to_ls_item(tree: &DocumentTree, e: &DocumentEntry, depth: Option<u32>) -> LsI
         name: e.visible_name.clone(),
         kind: e.item_type.into(),
         file_type: e.file_type,
-        parent_uuid,
-        path,
+        parent_uuid: e.parent_uuid(),
+        path: common::entry_path(tree, e),
         modified: e.last_modified,
         last_opened: e.last_opened,
         tags: e.tags.clone(),
@@ -296,66 +272,41 @@ fn build_tree_children(
     }
     let mut children = tree.child_entries(parent);
     children.retain(|e| args.include_trashed || !e.is_trashed());
-    // For tree mode, folders are kept as structure regardless of `--documents-only`.
-    // `--folders-only` strips documents entirely.
     if args.folders_only {
         children.retain(|e| e.is_folder());
     }
-    if args.documents_only {
-        // Keep folders so users still see hierarchy; drop folders that have no
-        // surviving documents in their subtree (otherwise the tree fills with
-        // empty folders).
-        children
-            .retain(|e| e.is_document() || folder_has_descendants(tree, e, args, current_depth));
-    }
     tree::sort_entries(&mut children, args.sort.as_ref());
 
+    // Recurse first, then prune empty folders bottom-up under `--documents-only`.
+    // This collapses what was an O(n²) pre-filter (folder_has_descendants) into
+    // a single tree walk.
     children
         .into_iter()
-        .map(|e| TreeNode {
-            uuid: Some(e.uuid),
-            name: e.visible_name.clone(),
-            kind: e.item_type.into(),
-            file_type: e.file_type,
-            last_opened: e.last_opened,
-            tags: e.tags.clone(),
-            pinned: e.pinned,
-            page_count: e.page_count,
-            children: if e.is_folder() {
+        .filter_map(|e| {
+            let nested = if e.is_folder() {
                 build_tree_children(tree, &Parent::Folder(e.uuid), args, current_depth + 1)
             } else {
                 Vec::new()
-            },
+            };
+            if args.documents_only {
+                let keep = e.is_document() || (e.is_folder() && !nested.is_empty());
+                if !keep {
+                    return None;
+                }
+            }
+            Some(TreeNode {
+                uuid: Some(e.uuid),
+                name: e.visible_name.clone(),
+                kind: e.item_type.into(),
+                file_type: e.file_type,
+                last_opened: e.last_opened,
+                tags: e.tags.clone(),
+                pinned: e.pinned,
+                page_count: e.page_count,
+                children: nested,
+            })
         })
         .collect()
-}
-
-fn folder_has_descendants(
-    tree: &DocumentTree,
-    folder: &DocumentEntry,
-    args: &LsArgs,
-    current_depth: u32,
-) -> bool {
-    if !folder.is_folder() {
-        return false;
-    }
-    if let Some(max) = args.depth
-        && current_depth + 1 >= max
-    {
-        return false;
-    }
-    for child in tree.child_entries(&Parent::Folder(folder.uuid)) {
-        if !args.include_trashed && child.is_trashed() {
-            continue;
-        }
-        if child.is_document() {
-            return true;
-        }
-        if folder_has_descendants(tree, child, args, current_depth + 1) {
-            return true;
-        }
-    }
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +331,7 @@ fn print_flat_human(items: &[LsItem]) {
     let rows: Vec<[String; 4]> = items
         .iter()
         .map(|i| {
-            let type_label = type_label(i.kind, i.file_type);
+            let type_label = common::type_label(i.kind, i.file_type).to_string();
             let name = flat_item_name(i, recursive);
             let modified = i.modified.format("%Y-%m-%d %H:%M:%S").to_string();
             let extras = format_extras(i);
@@ -445,17 +396,6 @@ fn flat_item_name(item: &LsItem, recursive: bool) -> String {
             name.push_str(" *");
         }
         name
-    }
-}
-
-fn type_label(kind: ItemKind, file_type: Option<FileType>) -> String {
-    match (kind, file_type) {
-        (ItemKind::Folder, _) => "folder".to_string(),
-        (ItemKind::Document, Some(FileType::Pdf)) => "pdf".to_string(),
-        (ItemKind::Document, Some(FileType::Epub)) => "epub".to_string(),
-        (ItemKind::Document, Some(FileType::Notebook)) => "notebook".to_string(),
-        (ItemKind::Document, None) => "document".to_string(),
-        (ItemKind::Template, _) => "template".to_string(),
     }
 }
 
