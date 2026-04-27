@@ -1,10 +1,11 @@
-use crate::cli::{GlobalOptions, UploadArgs};
-use crate::error::Result;
-use crate::output;
+use crate::cli::UploadArgs;
+use crate::commands::common::CommandContext;
+use crate::error::CliError;
 
 /// # Errors
-/// Currently a stub; never errors. Will return SSH/SFTP errors once implemented.
-pub fn execute(global: &GlobalOptions, _args: &UploadArgs) -> Result<()> {
-    output::print_not_implemented("upload", global.format);
-    Ok(())
+/// Returns `CliError::NotImplemented` until the command is implemented.
+pub async fn execute(_ctx: &CommandContext, _args: &UploadArgs) -> Result<(), CliError> {
+    Err(CliError::NotImplemented(
+        "upload command is not implemented yet".to_string(),
+    ))
 }

@@ -244,8 +244,11 @@ impl RawContent {
     /// back to the length of the `pages` array; otherwise `None`.
     #[must_use]
     pub fn effective_page_count(&self) -> Option<u32> {
-        self.page_count
-            .or_else(|| self.pages.as_ref().and_then(|p| u32::try_from(p.len()).ok()))
+        self.page_count.or_else(|| {
+            self.pages
+                .as_ref()
+                .and_then(|p| u32::try_from(p.len()).ok())
+        })
     }
 }
 
@@ -272,6 +275,41 @@ pub struct DocumentEntry {
 }
 
 impl DocumentEntry {
+    /// # Errors
+    /// Returns an error when building a document entry without a parsed `.content` file.
+    pub fn from_raw(
+        uuid: Uuid,
+        raw: RawMetadata,
+        content: Option<RawContent>,
+    ) -> anyhow::Result<Self> {
+        let kind = match raw.item_type {
+            ItemType::Collection => ItemKind::Folder,
+            ItemType::Template => ItemKind::Template,
+            ItemType::Document => {
+                let content = content.ok_or_else(|| {
+                    anyhow::anyhow!("document {uuid} is missing a valid .content file")
+                })?;
+                ItemKind::Document {
+                    file_type: content.file_type,
+                    page_count: content.effective_page_count(),
+                }
+            }
+        };
+
+        Ok(Self {
+            uuid,
+            visible_name: raw.visible_name,
+            kind,
+            parent: raw.parent,
+            deleted: raw.deleted,
+            pinned: raw.pinned,
+            last_modified: raw.last_modified,
+            version: raw.version,
+            tags: raw.tags,
+            last_opened: raw.last_opened,
+        })
+    }
+
     #[must_use]
     pub fn is_root_child(&self) -> bool {
         self.parent == Parent::Root

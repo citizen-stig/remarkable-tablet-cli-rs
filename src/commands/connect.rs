@@ -1,33 +1,27 @@
 use anyhow::Context;
 
-use crate::cli::GlobalOptions;
-use crate::commands::common;
-use crate::error::Result;
+use crate::commands::common::{self, CommandContext};
+use crate::error::CliError;
 use crate::output;
 use crate::tablet;
 
 /// # Errors
 /// Returns an error if the SSH connection fails or device info cannot be fetched.
-pub async fn execute(global: &GlobalOptions) -> Result<()> {
-    run(global).await.map_err(common::to_cli_error)
+pub async fn execute(ctx: &CommandContext) -> Result<(), CliError> {
+    run(ctx).await.map_err(common::to_cli_error)
 }
 
-async fn run(global: &GlobalOptions) -> anyhow::Result<()> {
-    let (ssh, cfg) = common::connect(global).await?;
+async fn run(ctx: &CommandContext) -> anyhow::Result<()> {
+    let session = ctx.connect().await?;
 
-    output::log_verbose(global, "connected; fetching device info");
+    ctx.log_verbose("connected; fetching device info");
 
-    let host = cfg
-        .host
-        .clone()
-        .expect("connect succeeded so host must be set");
-
-    let info = tablet::fetch_device_info(&ssh, &host, &cfg.data_dir)
+    let info = tablet::fetch_device_info(&session.ssh, &session.host, ctx.data_dir())
         .await
         .context("fetch device info")?;
 
-    ssh.disconnect().await;
+    session.ssh.disconnect().await;
 
-    output::print_device_info(&info, cfg.format);
+    output::print_device_info(&info, ctx.format());
     Ok(())
 }

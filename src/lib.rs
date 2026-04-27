@@ -1,9 +1,11 @@
+pub mod app;
 pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod connection;
 pub mod error;
 pub mod metadata;
+pub mod metadata_loader;
 pub mod output;
 pub mod path_resolver;
 pub mod tablet;

@@ -1,7 +1,5 @@
 use serde_json::json;
 
-pub type Result<T> = std::result::Result<T, CliError>;
-
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
     #[error("Connection failed: {0}")]
@@ -28,6 +26,9 @@ pub enum CliError {
     #[error("Format error: {0}")]
     FormatError(String),
 
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
+
     #[error("IO error: {0}")]
     IoError(String),
 }
@@ -44,6 +45,7 @@ impl CliError {
             Self::PermissionDenied(_) => "permission_denied",
             Self::XochitlError(_) => "xochitl_error",
             Self::FormatError(_) => "format_error",
+            Self::NotImplemented(_) => "not_implemented",
             Self::IoError(_) => "io_error",
         }
     }
@@ -60,6 +62,7 @@ impl CliError {
             Self::XochitlError(_) => 7,
             Self::FormatError(_) => 8,
             Self::IoError(_) => 9,
+            Self::NotImplemented(_) => 10,
         }
     }
 

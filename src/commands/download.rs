@@ -1,10 +1,11 @@
-use crate::cli::{DownloadArgs, GlobalOptions};
-use crate::error::Result;
-use crate::output;
+use crate::cli::DownloadArgs;
+use crate::commands::common::CommandContext;
+use crate::error::CliError;
 
 /// # Errors
-/// Currently a stub; never errors. Will return SSH/SFTP errors once implemented.
-pub fn execute(global: &GlobalOptions, _args: &DownloadArgs) -> Result<()> {
-    output::print_not_implemented("download", global.format);
-    Ok(())
+/// Returns `CliError::NotImplemented` until the command is implemented.
+pub async fn execute(_ctx: &CommandContext, _args: &DownloadArgs) -> Result<(), CliError> {
+    Err(CliError::NotImplemented(
+        "download command is not implemented yet".to_string(),
+    ))
 }

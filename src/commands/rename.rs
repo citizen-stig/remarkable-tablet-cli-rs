@@ -1,10 +1,11 @@
-use crate::cli::{GlobalOptions, RenameArgs};
-use crate::error::Result;
-use crate::output;
+use crate::cli::RenameArgs;
+use crate::commands::common::CommandContext;
+use crate::error::CliError;
 
 /// # Errors
-/// Currently a stub; never errors. Will return SSH/SFTP errors once implemented.
-pub fn execute(global: &GlobalOptions, _args: &RenameArgs) -> Result<()> {
-    output::print_not_implemented("rename", global.format);
-    Ok(())
+/// Returns `CliError::NotImplemented` until the command is implemented.
+pub async fn execute(_ctx: &CommandContext, _args: &RenameArgs) -> Result<(), CliError> {
+    Err(CliError::NotImplemented(
+        "rename command is not implemented yet".to_string(),
+    ))
 }

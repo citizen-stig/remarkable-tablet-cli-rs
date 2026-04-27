@@ -8,13 +8,12 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::cli::GlobalOptions;
-use crate::config::{self, ResolvedConfig};
+use crate::config::ResolvedConfig;
 use crate::connection::{ConnectOptions, SshConnection};
 use crate::error::CliError;
-use crate::metadata::{DocumentEntry, FileType};
 pub use crate::metadata::ItemKind;
+use crate::metadata::{DocumentEntry, FileType};
 use crate::output;
-use crate::path_resolver;
 use crate::tablet::{self};
 use crate::tree::DocumentTree;
 
@@ -52,7 +51,10 @@ impl EntryView {
         Self {
             uuid: entry.uuid,
             name: entry.visible_name.clone(),
-            path: entry_path(tree, entry),
+            path: tree.display_path(&entry.uuid).map_or_else(
+                || format!("/{}", entry.visible_name),
+                std::string::ToString::to_string,
+            ),
             kind: entry.kind.clone(),
             parent_uuid: entry.parent_uuid(),
             last_modified: entry.last_modified,
@@ -96,85 +98,99 @@ pub fn file_type_label(file_type: FileType) -> &'static str {
     }
 }
 
-/// Resolve `entry`'s full path, falling back to a top-level synthetic path on
-/// resolver failure (broken parent chain or missing intermediate folder).
-#[must_use]
-pub fn entry_path(tree: &DocumentTree, entry: &DocumentEntry) -> String {
-    path_resolver::resolve_uuid_to_path(tree, &entry.uuid)
-        .unwrap_or_else(|_| format!("/{}", entry.visible_name))
+#[derive(Debug, Clone)]
+pub struct CommandContext {
+    global: GlobalOptions,
+    config: ResolvedConfig,
+}
+
+pub struct ConnectedSession {
+    pub ssh: SshConnection,
+    pub host: String,
+}
+
+impl CommandContext {
+    #[must_use]
+    pub fn new(global: GlobalOptions, config: ResolvedConfig) -> Self {
+        Self { global, config }
+    }
+
+    #[must_use]
+    pub fn format(&self) -> output::OutputFormat {
+        self.config.format
+    }
+
+    #[must_use]
+    pub fn data_dir(&self) -> &str {
+        &self.config.data_dir
+    }
+
+    pub fn log_verbose(&self, msg: &str) {
+        output::log_verbose(&self.global, msg);
+    }
+
+    /// # Errors
+    /// Returns an error if host discovery, SSH authentication, or SFTP subsystem startup fails.
+    pub async fn connect(&self) -> anyhow::Result<ConnectedSession> {
+        let host = discover_host(&self.global, &self.config).await?;
+
+        self.log_verbose(&format!("connecting to {host}:{}", self.config.port));
+
+        let opts = ConnectOptions {
+            user: self.config.user.clone(),
+            password: self.config.password.clone(),
+            key_file: Some(self.config.key_file.clone()),
+            timeout: self.config.timeout,
+            verbose: self.config.verbose && !self.config.quiet,
+        };
+
+        let ssh = SshConnection::connect(&host, self.config.port, &opts)
+            .await
+            .context("ssh connect")?;
+
+        Ok(ConnectedSession { ssh, host })
+    }
+
+    /// # Errors
+    /// Returns an error if any `.metadata` file cannot be read or parsed.
+    pub async fn load_tree(&self, ssh: &SshConnection) -> anyhow::Result<DocumentTree> {
+        self.log_verbose(&format!("loading metadata from {}", self.config.data_dir));
+        let (entries, diag) = tablet::load_all_metadata_full(ssh, &self.config.data_dir)
+            .await
+            .context("load metadata")?;
+        self.log_verbose(
+            &format!(
+                "xochitl: {} dir entries ({}ms list_dir), {} matched <uuid>.metadata, {} parsed in {}ms, {} parse failures, {} content failures",
+                diag.dir_entry_count,
+                diag.list_dir_elapsed.as_millis(),
+                diag.uuid_metadata_count,
+                entries.len(),
+                diag.read_elapsed.as_millis(),
+                diag.parse_failures.len(),
+                diag.content_failures.len(),
+            ),
+        );
+        for (file, err) in &diag.parse_failures {
+            self.log_verbose(&format!("  parse failed: {file}: {err}"));
+        }
+        for (uuid, err) in &diag.content_failures {
+            self.log_verbose(&format!("  content failed: {uuid}: {err}"));
+        }
+        Ok(DocumentTree::build(entries))
+    }
+
+    /// # Errors
+    /// Returns an error if connection fails or metadata loading fails.
+    pub async fn connect_and_load_tree(&self) -> anyhow::Result<(ConnectedSession, DocumentTree)> {
+        let session = self.connect().await?;
+        let tree = self.load_tree(&session.ssh).await?;
+        Ok((session, tree))
+    }
 }
 
 const USB_HOST: &str = "10.11.99.1";
 const USB_PORT: u16 = 22;
 const USB_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Resolve config, discover the tablet host, and open an SSH session.
-///
-/// Returns the live `SshConnection` plus the merged config so callers can
-/// reuse derived values (`data_dir`, format, etc.). Caller is responsible for
-/// `ssh.disconnect().await` when finished.
-///
-/// # Errors
-/// Returns an error if host discovery, SSH authentication, or SFTP subsystem startup fails.
-pub async fn connect(global: &GlobalOptions) -> anyhow::Result<(SshConnection, ResolvedConfig)> {
-    let file_cfg = config::load_file_config(None).unwrap_or_default();
-    let mut resolved = config::resolve(global, &file_cfg);
-    let host = discover_host(global, &resolved).await?;
-
-    output::log_verbose(global, &format!("connecting to {host}:{}", resolved.port));
-
-    let opts = ConnectOptions {
-        user: resolved.user.clone(),
-        password: resolved.password.clone(),
-        key_file: Some(resolved.key_file.clone()),
-        timeout: resolved.timeout,
-        verbose: resolved.verbose && !resolved.quiet,
-    };
-
-    let ssh = SshConnection::connect(&host, resolved.port, &opts)
-        .await
-        .context("ssh connect")?;
-
-    resolved.host = Some(host);
-    Ok((ssh, resolved))
-}
-
-/// Connect, then load the full document tree from the tablet.
-///
-/// Convenience for read-only browse commands. Caller is responsible for
-/// `ssh.disconnect().await` when finished with the connection.
-///
-/// # Errors
-/// Returns an error if connection fails or any `.metadata` file cannot be read or parsed.
-pub async fn connect_and_load_tree(
-    global: &GlobalOptions,
-) -> anyhow::Result<(SshConnection, ResolvedConfig, DocumentTree)> {
-    let (ssh, cfg) = connect(global).await?;
-    output::log_verbose(global, &format!("loading metadata from {}", cfg.data_dir));
-    let (entries, diag) = tablet::load_all_metadata_full(&ssh, &cfg.data_dir)
-        .await
-        .context("load metadata")?;
-    output::log_verbose(
-        global,
-        &format!(
-            "xochitl: {} dir entries ({}ms list_dir), {} matched <uuid>.metadata, {} parsed in {}ms, {} parse failures, {} content failures",
-            diag.dir_entry_count,
-            diag.list_dir_elapsed.as_millis(),
-            diag.uuid_metadata_count,
-            entries.len(),
-            diag.read_elapsed.as_millis(),
-            diag.parse_failures.len(),
-            diag.content_failures.len(),
-        ),
-    );
-    for (file, err) in &diag.parse_failures {
-        output::log_verbose(global, &format!("  parse failed: {file}: {err}"));
-    }
-    for (uuid, err) in &diag.content_failures {
-        output::log_verbose(global, &format!("  content failed: {uuid}: {err}"));
-    }
-    Ok((ssh, cfg, DocumentTree::build(entries)))
-}
 
 /// Downcast an `anyhow::Error` to `CliError`, falling back to `IoError` so
 /// any unstructured failure still produces a usable JSON envelope.

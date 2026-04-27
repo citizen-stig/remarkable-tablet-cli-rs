@@ -15,41 +15,13 @@ pub enum OutputFormat {
 /// # Panics
 /// Panics if `value` cannot be serialized as JSON (e.g., a non-string map key).
 pub fn print_json<T: Serialize + ?Sized>(value: &T) {
-    println!(
-        "{}",
-        serde_json::to_string(value).expect("failed to serialize JSON")
-    );
+    println!("{}", render_json(value));
 }
 
 /// # Panics
 /// Panics if the error envelope cannot be serialized as JSON.
 pub fn print_error(error: &CliError, format: OutputFormat) {
-    match format {
-        OutputFormat::Json => {
-            eprintln!(
-                "{}",
-                serde_json::to_string(&error.to_json()).expect("failed to serialize JSON")
-            );
-        }
-        OutputFormat::Human => {
-            eprintln!("Error: {error}");
-        }
-    }
-}
-
-pub fn print_not_implemented(command: &str, format: OutputFormat) {
-    match format {
-        OutputFormat::Json => {
-            print_json(&serde_json::json!({
-                "error": true,
-                "code": "not_implemented",
-                "message": format!("Command '{command}' is not yet implemented"),
-            }));
-        }
-        OutputFormat::Human => {
-            println!("Command '{command}' is not yet implemented.");
-        }
-    }
+    eprintln!("{}", render_error(error, format));
 }
 
 pub fn print_device_info(info: &DeviceInfo, format: OutputFormat) {
@@ -70,5 +42,22 @@ pub fn print_device_info(info: &DeviceInfo, format: OutputFormat) {
 pub fn log_verbose(global: &GlobalOptions, msg: &str) {
     if global.verbose && !global.quiet {
         eprintln!("{msg}");
+    }
+}
+
+/// # Panics
+/// Panics if `value` cannot be serialized as JSON (e.g., a non-string map key).
+#[must_use]
+pub fn render_json<T: Serialize + ?Sized>(value: &T) -> String {
+    serde_json::to_string(value).expect("failed to serialize JSON")
+}
+
+/// # Panics
+/// Panics if the error envelope cannot be serialized as JSON.
+#[must_use]
+pub fn render_error(error: &CliError, format: OutputFormat) -> String {
+    match format {
+        OutputFormat::Json => render_json(&error.to_json()),
+        OutputFormat::Human => format!("Error: {error}"),
     }
 }

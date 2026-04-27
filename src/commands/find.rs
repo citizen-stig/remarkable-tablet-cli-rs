@@ -1,8 +1,8 @@
 use glob::{MatchOptions, Pattern};
 
-use crate::cli::{FindArgs, FindTypeFilter, GlobalOptions};
-use crate::commands::common::{self, EntryView};
-use crate::error::{CliError, Result};
+use crate::cli::{FindArgs, FindTypeFilter};
+use crate::commands::common::{self, CommandContext, EntryView};
+use crate::error::CliError;
 use crate::metadata::DocumentEntry;
 use crate::output::{self, OutputFormat};
 use crate::tree::DocumentTree;
@@ -11,16 +11,16 @@ pub type FindItem = EntryView;
 
 /// # Errors
 /// Returns an error if connection fails, metadata cannot be loaded, or the pattern is an invalid glob.
-pub async fn execute(global: &GlobalOptions, args: &FindArgs) -> Result<()> {
-    run(global, args).await.map_err(common::to_cli_error)
+pub async fn execute(ctx: &CommandContext, args: &FindArgs) -> Result<(), CliError> {
+    run(ctx, args).await.map_err(common::to_cli_error)
 }
 
-async fn run(global: &GlobalOptions, args: &FindArgs) -> anyhow::Result<()> {
-    let (ssh, cfg, tree) = common::connect_and_load_tree(global).await?;
+async fn run(ctx: &CommandContext, args: &FindArgs) -> anyhow::Result<()> {
+    let (session, tree) = ctx.connect_and_load_tree().await?;
     let result = run_with_tree(&tree, args);
-    ssh.disconnect().await;
+    session.ssh.disconnect().await;
     let items = result?;
-    print_output(&items, cfg.format);
+    print_output(&items, ctx.format());
     Ok(())
 }
 

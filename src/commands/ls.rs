@@ -1,17 +1,16 @@
 use std::collections::HashSet;
 
-use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::cli::{GlobalOptions, LsArgs, SortField};
-use crate::commands::common::{self, EntryView, ItemKind};
-use crate::error::{CliError, Result};
+use crate::cli::LsArgs;
+use crate::commands::common::{self, CommandContext, EntryView, ItemKind};
+use crate::error::CliError;
 use crate::metadata::{DocumentEntry, FileType, Parent};
 use crate::output::{self, OutputFormat};
 use crate::path_resolver::{self, Resolved};
-use crate::tree::{self, DocumentTree, ListFilter};
+use crate::tree::{DocumentTree, ListFilter};
 
 #[derive(Serialize, Debug)]
 pub struct LsItem {
@@ -54,16 +53,16 @@ pub enum LsOutput {
 
 /// # Errors
 /// Returns an error if connection fails, metadata cannot be loaded, or the path/UUID does not resolve.
-pub async fn execute(global: &GlobalOptions, args: &LsArgs) -> Result<()> {
-    run(global, args).await.map_err(common::to_cli_error)
+pub async fn execute(ctx: &CommandContext, args: &LsArgs) -> Result<(), CliError> {
+    run(ctx, args).await.map_err(common::to_cli_error)
 }
 
-async fn run(global: &GlobalOptions, args: &LsArgs) -> anyhow::Result<()> {
-    let (ssh, cfg, tree) = common::connect_and_load_tree(global).await?;
+async fn run(ctx: &CommandContext, args: &LsArgs) -> anyhow::Result<()> {
+    let (session, tree) = ctx.connect_and_load_tree().await?;
     let result = run_with_tree(&tree, args);
-    ssh.disconnect().await;
+    session.ssh.disconnect().await;
     let output = result?;
-    print_output(&output, cfg.format);
+    print_output(&output, ctx.format());
     Ok(())
 }
 
@@ -114,16 +113,7 @@ fn resolve_target(tree: &DocumentTree, args: &LsArgs) -> anyhow::Result<Target> 
 // ---------------------------------------------------------------------------
 
 fn build_flat(tree: &DocumentTree, target: &Target, filter: ListFilter<'_>) -> Vec<LsItem> {
-    let entries = if filter.includes_trashed() && matches!(target.parent, Parent::Root) {
-        filter_flat_entries(
-            merged_root_and_trash_children(tree, filter.sort_field()),
-            filter,
-        )
-    } else {
-        tree.list_children(&target.parent, filter)
-    };
-
-    entries
+    tree.list_children(&target.parent, filter)
         .into_iter()
         .map(|e| to_ls_item(tree, e, None))
         .collect()
@@ -167,81 +157,6 @@ fn virtual_tree_folder(name: &str, children: Vec<TreeNode>) -> TreeNode {
     }
 }
 
-fn merged_root_and_trash_children<'a>(
-    tree: &'a DocumentTree,
-    sort: Option<&SortField>,
-) -> Vec<&'a DocumentEntry> {
-    let mut children = tree.child_entries(&Parent::Root);
-    children.extend(tree.child_entries(&Parent::Trash));
-    tree::sort_entries(&mut children, sort);
-    children
-}
-
-fn filter_flat_entries<'a>(
-    mut entries: Vec<&'a DocumentEntry>,
-    filter: ListFilter<'_>,
-) -> Vec<&'a DocumentEntry> {
-    entries.retain(|entry| filter.matches(entry));
-    entries
-}
-
-fn visible_children<'a>(
-    tree: &'a DocumentTree,
-    parent: &Parent,
-    filter: ListFilter<'_>,
-) -> Vec<&'a DocumentEntry> {
-    let mut children = tree.child_entries(parent);
-    if !filter.includes_trashed() {
-        children.retain(|entry| !entry.is_trashed());
-    }
-    tree::sort_entries(&mut children, filter.sort_field());
-    children
-}
-
-fn cycle_error(uuid: Uuid) -> anyhow::Error {
-    anyhow!("cycle detected while traversing folder UUID {uuid}")
-}
-
-fn collect_recursive_items<'a>(
-    tree: &'a DocumentTree,
-    entries: Vec<&'a DocumentEntry>,
-    current_depth: u32,
-    max_depth: Option<u32>,
-    filter: ListFilter<'_>,
-    ancestors: &mut HashSet<Uuid>,
-    result: &mut Vec<(u32, &'a DocumentEntry)>,
-) -> anyhow::Result<()> {
-    if let Some(max) = max_depth
-        && current_depth >= max
-    {
-        return Ok(());
-    }
-
-    for entry in entries {
-        if filter.matches(entry) {
-            result.push((current_depth, entry));
-        }
-        if entry.is_folder() {
-            if !ancestors.insert(entry.uuid) {
-                return Err(cycle_error(entry.uuid));
-            }
-            let children = visible_children(tree, &Parent::Folder(entry.uuid), filter);
-            collect_recursive_items(
-                tree,
-                children,
-                current_depth + 1,
-                max_depth,
-                filter,
-                ancestors,
-                result,
-            )?;
-            ancestors.remove(&entry.uuid);
-        }
-    }
-
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Flat recursive listing
 // ---------------------------------------------------------------------------
@@ -252,23 +167,6 @@ fn build_recursive(
     filter: ListFilter<'_>,
     depth: Option<u32>,
 ) -> anyhow::Result<Vec<LsItem>> {
-    if filter.includes_trashed() && matches!(target.parent, Parent::Root) {
-        let mut pairs = Vec::new();
-        let mut ancestors = HashSet::new();
-        collect_recursive_items(
-            tree,
-            merged_root_and_trash_children(tree, filter.sort_field()),
-            0,
-            depth,
-            filter,
-            &mut ancestors,
-            &mut pairs,
-        )?;
-        return Ok(pairs
-            .into_iter()
-            .map(|(depth, e)| to_ls_item(tree, e, Some(depth)))
-            .collect());
-    }
     Ok(tree
         .list_recursive(&target.parent, depth, filter)?
         .into_iter()
@@ -337,7 +235,7 @@ fn build_tree_children(
     {
         return Ok(Vec::new());
     }
-    let mut children = visible_children(tree, parent, filter);
+    let mut children = tree.sorted_direct_children(parent, filter);
     children.retain(|entry| filter.matches(entry) || entry.is_folder());
 
     // Recurse first, then prune empty folders bottom-up under `--documents-only`.
@@ -348,7 +246,10 @@ fn build_tree_children(
         .map(|e| {
             let nested = if e.is_folder() {
                 if !ancestors.insert(e.uuid) {
-                    return Err(cycle_error(e.uuid));
+                    return Err(anyhow::anyhow!(
+                        "cycle detected while traversing folder UUID {}",
+                        e.uuid
+                    ));
                 }
                 let nested = build_tree_children(
                     tree,
@@ -408,7 +309,11 @@ fn print_flat_human(items: &[LsItem]) {
         .map(|i| {
             let type_label = common::type_label(&i.entry.kind).to_string();
             let name = flat_item_name(i, recursive);
-            let modified = i.entry.last_modified.format("%Y-%m-%d %H:%M:%S").to_string();
+            let modified = i
+                .entry
+                .last_modified
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string();
             let extras = format_extras(i);
             [type_label, name, modified, extras]
         })

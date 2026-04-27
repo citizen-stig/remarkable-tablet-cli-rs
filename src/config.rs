@@ -1,15 +1,10 @@
-// The `if cli.x != DEFAULT { cli.x } else { file.x }` precedence pattern below
-// reads naturally as "if the user set the CLI flag, use it; else fall back to file".
-// Inverting to the `==` form fights the precedence comment; allow the lint instead.
-#![allow(clippy::if_not_else)]
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
 use serde::Deserialize;
 
-use crate::cli::GlobalOptions;
+use crate::cli::{CliValueSource, GlobalOptionSources, GlobalOptions};
 use crate::output::OutputFormat;
 
 pub const DEFAULT_PORT: u16 = 22;
@@ -73,61 +68,53 @@ pub fn load_file_config(path: Option<&Path>) -> anyhow::Result<FileConfig> {
 }
 
 #[must_use]
-pub fn resolve(cli: &GlobalOptions, file: &FileConfig) -> ResolvedConfig {
-    // Precedence (per field): CLI > env > file > built-in default.
-    // For non-optional clap fields, the default is the built-in — so if the
-    // CLI value equals that default, we treat it as "not user-set" and let
-    // the file override. See plan for the documented edge case.
-
-    let host = cli.host.clone().or_else(|| file.host.clone());
-
-    let port = if cli.port != DEFAULT_PORT {
-        cli.port
+pub fn resolve(
+    cli: &GlobalOptions,
+    sources: &GlobalOptionSources,
+    file: &FileConfig,
+) -> ResolvedConfig {
+    let host = if sources.host.is_explicit() {
+        cli.host.clone()
     } else {
-        file.port.unwrap_or(DEFAULT_PORT)
+        file.host.clone()
     };
 
-    let user = if cli.user != DEFAULT_USER {
-        cli.user.clone()
+    let port = resolve_value(cli.port, sources.port, file.port, DEFAULT_PORT);
+    let user = resolve_value(
+        cli.user.clone(),
+        sources.user,
+        file.user.clone(),
+        DEFAULT_USER.to_string(),
+    );
+
+    let password = if sources.password.is_explicit() {
+        cli.password.clone()
     } else {
-        file.user
-            .clone()
-            .unwrap_or_else(|| DEFAULT_USER.to_string())
+        file.password.clone()
     };
 
-    // clap handles env for password via REMARKABLE_PASSWORD, so cli.password
-    // already carries CLI > env. Fall back to file.
-    let password = cli.password.clone().or_else(|| file.password.clone());
+    let key_file = PathBuf::from(resolve_value(
+        cli.key_file.clone(),
+        sources.key_file,
+        file.key_file.clone(),
+        DEFAULT_KEY_FILE.to_string(),
+    ));
 
-    let key_file = if cli.key_file != DEFAULT_KEY_FILE {
-        PathBuf::from(&cli.key_file)
-    } else {
-        PathBuf::from(
-            file.key_file
-                .clone()
-                .unwrap_or_else(|| DEFAULT_KEY_FILE.to_string()),
-        )
-    };
+    let format = resolve_value(cli.format, sources.format, file.format, OutputFormat::Human);
 
-    let format = if cli.format != OutputFormat::Human {
-        cli.format
-    } else {
-        file.format.unwrap_or(OutputFormat::Human)
-    };
+    let data_dir = resolve_value(
+        cli.data_dir.clone(),
+        sources.data_dir,
+        file.data_dir.clone(),
+        DEFAULT_DATA_DIR.to_string(),
+    );
 
-    let data_dir = if cli.data_dir != DEFAULT_DATA_DIR {
-        cli.data_dir.clone()
-    } else {
-        file.data_dir
-            .clone()
-            .unwrap_or_else(|| DEFAULT_DATA_DIR.to_string())
-    };
-
-    let timeout_secs = if cli.timeout != DEFAULT_TIMEOUT_SECS {
-        cli.timeout
-    } else {
-        file.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS)
-    };
+    let timeout_secs = resolve_value(
+        cli.timeout,
+        sources.timeout,
+        file.timeout,
+        DEFAULT_TIMEOUT_SECS,
+    );
 
     ResolvedConfig {
         host,
@@ -140,6 +127,19 @@ pub fn resolve(cli: &GlobalOptions, file: &FileConfig) -> ResolvedConfig {
         timeout: Duration::from_secs(timeout_secs),
         verbose: cli.verbose,
         quiet: cli.quiet,
+    }
+}
+
+fn resolve_value<T: Clone>(
+    cli_value: T,
+    source: CliValueSource,
+    file_value: Option<T>,
+    default_value: T,
+) -> T {
+    if source.is_explicit() {
+        cli_value
+    } else {
+        file_value.unwrap_or(default_value)
     }
 }
 
@@ -164,6 +164,13 @@ mod tests {
         }
     }
 
+    fn default_sources() -> GlobalOptionSources {
+        GlobalOptionSources {
+            host: CliValueSource::Unset,
+            ..GlobalOptionSources::default()
+        }
+    }
+
     #[test]
     fn cli_host_beats_file_host() {
         let mut cli = base_cli();
@@ -172,7 +179,14 @@ mod tests {
             host: Some("from-file".into()),
             ..Default::default()
         };
-        let r = resolve(&cli, &file);
+        let r = resolve(
+            &cli,
+            &GlobalOptionSources {
+                host: CliValueSource::CommandLine,
+                ..default_sources()
+            },
+            &file,
+        );
         assert_eq!(r.host.as_deref(), Some("from-cli"));
     }
 
@@ -183,7 +197,7 @@ mod tests {
             host: Some("from-file".into()),
             ..Default::default()
         };
-        let r = resolve(&cli, &file);
+        let r = resolve(&cli, &default_sources(), &file);
         assert_eq!(r.host.as_deref(), Some("from-file"));
     }
 
@@ -195,7 +209,14 @@ mod tests {
             password: Some("file-pw".into()),
             ..Default::default()
         };
-        let r = resolve(&cli, &file);
+        let r = resolve(
+            &cli,
+            &GlobalOptionSources {
+                password: CliValueSource::CommandLine,
+                ..default_sources()
+            },
+            &file,
+        );
         assert_eq!(r.password.as_deref(), Some("cli-pw"));
     }
 
@@ -206,7 +227,7 @@ mod tests {
             password: Some("file-pw".into()),
             ..Default::default()
         };
-        let r = resolve(&cli, &file);
+        let r = resolve(&cli, &default_sources(), &file);
         assert_eq!(r.password.as_deref(), Some("file-pw"));
     }
 
@@ -214,7 +235,7 @@ mod tests {
     fn default_data_dir_when_nothing_set() {
         let cli = base_cli();
         let file = FileConfig::default();
-        let r = resolve(&cli, &file);
+        let r = resolve(&cli, &default_sources(), &file);
         assert_eq!(r.data_dir, DEFAULT_DATA_DIR);
     }
 
@@ -225,7 +246,7 @@ mod tests {
             data_dir: Some("/custom/path".into()),
             ..Default::default()
         };
-        let r = resolve(&cli, &file);
+        let r = resolve(&cli, &default_sources(), &file);
         assert_eq!(r.data_dir, "/custom/path");
     }
 
@@ -237,8 +258,51 @@ mod tests {
             port: Some(3333),
             ..Default::default()
         };
-        let r = resolve(&cli, &file);
+        let r = resolve(
+            &cli,
+            &GlobalOptionSources {
+                port: CliValueSource::CommandLine,
+                ..default_sources()
+            },
+            &file,
+        );
         assert_eq!(r.port, 2222);
+    }
+
+    #[test]
+    fn explicit_default_port_beats_file_value() {
+        let cli = base_cli();
+        let file = FileConfig {
+            port: Some(3333),
+            ..Default::default()
+        };
+        let r = resolve(
+            &cli,
+            &GlobalOptionSources {
+                port: CliValueSource::CommandLine,
+                ..default_sources()
+            },
+            &file,
+        );
+        assert_eq!(r.port, DEFAULT_PORT);
+    }
+
+    #[test]
+    fn explicit_default_format_beats_file_value() {
+        let cli = base_cli();
+        let file = FileConfig {
+            format: Some(OutputFormat::Json),
+            ..Default::default()
+        };
+        let r = resolve(
+            &cli,
+            &GlobalOptionSources {
+                format: CliValueSource::CommandLine,
+                ..default_sources()
+            },
+            &file,
+        );
+        assert_eq!(r.format, OutputFormat::Human);
     }
 
     #[test]

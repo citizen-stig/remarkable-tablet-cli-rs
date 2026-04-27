@@ -1,9 +1,8 @@
-use anyhow::anyhow;
 use uuid::Uuid;
 
 use crate::error::CliError;
 use crate::metadata::{DocumentEntry, Parent};
-use crate::tree::DocumentTree;
+use crate::tree::{ChildLookup, DocumentTree};
 
 /// Result of resolving a path-or-UUID argument.
 #[derive(Debug)]
@@ -45,22 +44,15 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
 
     for (offset, segment) in segments[start_index..].iter().enumerate() {
         let i = start_index + offset;
-        let children = tree.child_entries(&current_parent);
-        let matches: Vec<_> = children
-            .iter()
-            .filter(|e| e.visible_name == *segment)
-            .collect();
-
-        match matches.len() {
-            0 => {
+        match tree.lookup_child(&current_parent, segment) {
+            ChildLookup::Missing => {
                 let resolved_so_far = format!("/{}", segments[..i].join("/"));
                 return Err(CliError::NotFound(format!(
                     "'{segment}' not found in {resolved_so_far}"
                 ))
                 .into());
             }
-            1 => {
-                let entry = matches[0];
+            ChildLookup::Entry(entry) => {
                 if i == segments.len() - 1 {
                     return Ok(Resolved::Entry(entry));
                 }
@@ -72,7 +64,7 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
                 }
                 current_parent = Parent::Folder(entry.uuid);
             }
-            _ => {
+            ChildLookup::Ambiguous => {
                 return Err(CliError::InvalidPath(format!(
                     "ambiguous: multiple items named '{segment}' in the same folder — use a UUID instead"
                 ))
@@ -86,40 +78,12 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
 
 /// Resolve a UUID to its full human-readable path (e.g., `"/Work/Meeting Notes"`).
 ///
-/// Walks the parent chain upward. Returns `"/trash/..."` for trashed items.
-/// Caps at 100 levels to guard against cycles.
-///
 /// # Errors
-/// Returns an error if `uuid` is not in the tree, an ancestor's parent UUID is
-/// missing, or the parent chain exceeds 100 levels (suggesting a cycle).
+/// Returns an error if `uuid` is not in the tree.
 pub fn resolve_uuid_to_path(tree: &DocumentTree, uuid: &Uuid) -> anyhow::Result<String> {
-    let mut parts = Vec::new();
-    let mut current = tree
-        .get(uuid)
-        .ok_or_else(|| CliError::NotFound(format!("UUID {uuid} not found")))?;
-
-    for _ in 0..100 {
-        parts.push(current.visible_name.as_str());
-        match &current.parent {
-            Parent::Root => {
-                parts.reverse();
-                return Ok(format!("/{}", parts.join("/")));
-            }
-            Parent::Trash => {
-                parts.reverse();
-                return Ok(format!("/trash/{}", parts.join("/")));
-            }
-            Parent::Folder(parent_uuid) => {
-                current = tree
-                    .get(parent_uuid)
-                    .ok_or_else(|| anyhow!("broken parent chain: UUID {parent_uuid} not found"))?;
-            }
-        }
-    }
-
-    Err(anyhow!(
-        "parent chain too deep (>100 levels), possible cycle"
-    ))
+    tree.display_path(uuid)
+        .map(str::to_string)
+        .ok_or_else(|| CliError::NotFound(format!("UUID {uuid} not found")).into())
 }
 
 /// Accept either a UUID or a human path and resolve it.

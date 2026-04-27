@@ -13,6 +13,13 @@ use crate::metadata::{DocumentEntry, Parent};
 pub struct DocumentTree {
     entries: HashMap<Uuid, DocumentEntry>,
     children: HashMap<Parent, Vec<Uuid>>,
+    paths: HashMap<Uuid, String>,
+}
+
+pub enum ChildLookup<'a> {
+    Missing,
+    Entry(&'a DocumentEntry),
+    Ambiguous,
 }
 
 /// Listing-side filter knobs shared by `list_children` and `list_recursive`.
@@ -111,9 +118,12 @@ impl DocumentTree {
             by_uuid.insert(entry.uuid, entry);
         }
 
+        let paths = build_display_paths(&by_uuid);
+
         Self {
             entries: by_uuid,
             children,
+            paths,
         }
     }
 
@@ -137,24 +147,58 @@ impl DocumentTree {
             .unwrap_or_default()
     }
 
+    #[must_use]
+    pub fn lookup_child(&self, parent: &Parent, name: &str) -> ChildLookup<'_> {
+        let mut matches = self
+            .children
+            .get(parent)
+            .into_iter()
+            .flatten()
+            .filter_map(|uuid| self.entries.get(uuid))
+            .filter(|entry| entry.visible_name == name);
+
+        match (matches.next(), matches.next()) {
+            (None, _) => ChildLookup::Missing,
+            (Some(entry), None) => ChildLookup::Entry(entry),
+            (Some(_), Some(_)) => ChildLookup::Ambiguous,
+        }
+    }
+
     /// Number of direct children.
     #[must_use]
     pub fn children_count(&self, parent: &Parent) -> usize {
         self.children.get(parent).map_or(0, Vec::len)
     }
 
+    #[must_use]
+    pub fn display_path(&self, uuid: &Uuid) -> Option<&str> {
+        self.paths.get(uuid).map(String::as_str)
+    }
+
     /// List children of a folder with filters and sorting applied.
     #[must_use]
     pub fn list_children(&self, parent: &Parent, filter: ListFilter<'_>) -> Vec<&DocumentEntry> {
-        let mut result = self.child_entries(parent);
-
-        if !filter.includes_trashed() {
-            result.retain(|e| !e.is_trashed());
-        }
+        let mut result = if matches!(parent, Parent::Root) && filter.includes_trashed() {
+            self.merged_root_and_trash_children(filter.sort_field())
+        } else {
+            self.sorted_direct_children(parent, filter)
+        };
         result.retain(|e| filter.matches(e));
-
-        sort_entries(&mut result, filter.sort_field());
         result
+    }
+
+    #[must_use]
+    pub fn sorted_direct_children(
+        &self,
+        parent: &Parent,
+        filter: ListFilter<'_>,
+    ) -> Vec<&DocumentEntry> {
+        let mut children = self.child_entries(parent);
+        if !filter.includes_trashed() {
+            children.retain(|entry| !entry.is_trashed());
+        }
+        sort_entries(&mut children, filter.sort_field());
+        children
     }
 
     /// Recursively list all descendants up to a given depth.
@@ -175,7 +219,15 @@ impl DocumentTree {
         if let Parent::Folder(uuid) = parent {
             ancestors.insert(*uuid);
         }
-        self.collect_recursive(parent, 0, depth, filter, &mut ancestors, &mut result)?;
+        self.collect_recursive(
+            parent,
+            0,
+            depth,
+            filter,
+            &mut ancestors,
+            &mut result,
+            matches!(parent, Parent::Root) && filter.includes_trashed(),
+        )?;
         Ok(result)
     }
 
@@ -187,6 +239,7 @@ impl DocumentTree {
         filter: ListFilter<'_>,
         ancestors: &mut HashSet<Uuid>,
         result: &mut Vec<(u32, &'a DocumentEntry)>,
+        merge_root_trash: bool,
     ) -> anyhow::Result<()> {
         if let Some(max) = max_depth
             && current_depth >= max
@@ -194,11 +247,11 @@ impl DocumentTree {
             return Ok(());
         }
 
-        let mut children = self.child_entries(parent);
-        if !filter.includes_trashed() {
-            children.retain(|entry| !entry.is_trashed());
-        }
-        sort_entries(&mut children, filter.sort_field());
+        let children = if merge_root_trash {
+            self.merged_root_and_trash_children(filter.sort_field())
+        } else {
+            self.sorted_direct_children(parent, filter)
+        };
 
         for entry in children {
             if filter.matches(entry) {
@@ -218,6 +271,7 @@ impl DocumentTree {
                     filter,
                     ancestors,
                     result,
+                    false,
                 )?;
                 ancestors.remove(&entry.uuid);
             }
@@ -225,6 +279,65 @@ impl DocumentTree {
 
         Ok(())
     }
+
+    fn merged_root_and_trash_children(&self, sort: Option<&SortField>) -> Vec<&DocumentEntry> {
+        let mut children = self.child_entries(&Parent::Root);
+        children.extend(self.child_entries(&Parent::Trash));
+        sort_entries(&mut children, sort);
+        children
+    }
+}
+
+fn build_display_paths(entries: &HashMap<Uuid, DocumentEntry>) -> HashMap<Uuid, String> {
+    let mut paths = HashMap::with_capacity(entries.len());
+    let mut visiting = HashSet::new();
+
+    for uuid in entries.keys().copied() {
+        let path = build_display_path(entries, uuid, &mut paths, &mut visiting);
+        paths.insert(uuid, path);
+    }
+
+    paths
+}
+
+fn build_display_path(
+    entries: &HashMap<Uuid, DocumentEntry>,
+    uuid: Uuid,
+    paths: &mut HashMap<Uuid, String>,
+    visiting: &mut HashSet<Uuid>,
+) -> String {
+    if let Some(path) = paths.get(&uuid) {
+        return path.clone();
+    }
+
+    let Some(entry) = entries.get(&uuid) else {
+        return "/".to_string();
+    };
+
+    if !visiting.insert(uuid) {
+        return format!("/{}", entry.visible_name);
+    }
+
+    let path = match entry.parent {
+        Parent::Root => format!("/{}", entry.visible_name),
+        Parent::Trash => format!("/trash/{}", entry.visible_name),
+        Parent::Folder(parent_uuid) => {
+            if let Some(parent) = entries.get(&parent_uuid) {
+                let parent_path = build_display_path(entries, parent_uuid, paths, visiting);
+                if parent_path == "/" || parent.visible_name.is_empty() {
+                    format!("/{}", entry.visible_name)
+                } else {
+                    format!("{parent_path}/{}", entry.visible_name)
+                }
+            } else {
+                format!("/{}", entry.visible_name)
+            }
+        }
+    };
+
+    visiting.remove(&uuid);
+    paths.insert(uuid, path.clone());
+    path
 }
 
 pub fn sort_entries(entries: &mut [&DocumentEntry], sort: Option<&SortField>) {

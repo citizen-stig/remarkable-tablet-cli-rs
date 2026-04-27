@@ -1,10 +1,11 @@
-use crate::cli::{GlobalOptions, RmArgs};
-use crate::error::Result;
-use crate::output;
+use crate::cli::RmArgs;
+use crate::commands::common::CommandContext;
+use crate::error::CliError;
 
 /// # Errors
-/// Currently a stub; never errors. Will return SSH/SFTP errors once implemented.
-pub fn execute(global: &GlobalOptions, _args: &RmArgs) -> Result<()> {
-    output::print_not_implemented("rm", global.format);
-    Ok(())
+/// Returns `CliError::NotImplemented` until the command is implemented.
+pub async fn execute(_ctx: &CommandContext, _args: &RmArgs) -> Result<(), CliError> {
+    Err(CliError::NotImplemented(
+        "rm command is not implemented yet".to_string(),
+    ))
 }

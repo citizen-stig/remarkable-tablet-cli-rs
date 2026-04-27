@@ -1,9 +1,9 @@
 use serde::Serialize;
 
-use crate::cli::{GlobalOptions, InfoArgs};
-use crate::commands::common::{self, EntryView};
+use crate::cli::InfoArgs;
+use crate::commands::common::{self, CommandContext, EntryView};
 use crate::connection::TabletConnection;
-use crate::error::{CliError, Result};
+use crate::error::CliError;
 use crate::output::{self, OutputFormat};
 use crate::path_resolver::{self, Resolved};
 use crate::tree::DocumentTree;
@@ -20,16 +20,16 @@ pub struct InfoOutput {
 
 /// # Errors
 /// Returns an error if connection fails, metadata cannot be loaded, or the path/UUID does not resolve.
-pub async fn execute(global: &GlobalOptions, args: &InfoArgs) -> Result<()> {
-    run(global, args).await.map_err(common::to_cli_error)
+pub async fn execute(ctx: &CommandContext, args: &InfoArgs) -> Result<(), CliError> {
+    run(ctx, args).await.map_err(common::to_cli_error)
 }
 
-async fn run(global: &GlobalOptions, args: &InfoArgs) -> anyhow::Result<()> {
-    let (ssh, cfg, tree) = common::connect_and_load_tree(global).await?;
-    let result = run_with_conn(&ssh, &cfg.data_dir, &tree, args).await;
-    ssh.disconnect().await;
+async fn run(ctx: &CommandContext, args: &InfoArgs) -> anyhow::Result<()> {
+    let (session, tree) = ctx.connect_and_load_tree().await?;
+    let result = run_with_conn(&session.ssh, ctx.data_dir(), &tree, args).await;
+    session.ssh.disconnect().await;
     let info = result?;
-    print_output(&info, cfg.format);
+    print_output(&info, ctx.format());
     Ok(())
 }
 

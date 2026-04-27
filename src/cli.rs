@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgMatches, Args, Parser, Subcommand, ValueEnum, parser::ValueSource};
 
 use crate::output::OutputFormat;
 use crate::tree::EntryKindFilter;
@@ -15,38 +15,45 @@ pub struct Cli {
     pub command: Command,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct GlobalOptions {
     /// Tablet IP/hostname [auto-discover if omitted]
-    #[arg(long, global = true)]
+    #[arg(id = "host", long, global = true)]
     pub host: Option<String>,
 
     /// SSH port
-    #[arg(long, global = true, default_value_t = 22)]
+    #[arg(id = "port", long, global = true, default_value_t = 22)]
     pub port: u16,
 
     /// SSH username
-    #[arg(long, global = true, default_value = "root")]
+    #[arg(id = "user", long, global = true, default_value = "root")]
     pub user: String,
 
     /// SSH password (or set `REMARKABLE_PASSWORD` env var)
-    #[arg(long, global = true, env = "REMARKABLE_PASSWORD")]
+    #[arg(id = "password", long, global = true, env = "REMARKABLE_PASSWORD")]
     pub password: Option<String>,
 
     /// SSH private key path
-    #[arg(long, global = true, default_value = "~/.ssh/id_rsa")]
+    #[arg(id = "key_file", long, global = true, default_value = "~/.ssh/id_rsa")]
     pub key_file: String,
 
     /// Output format
-    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Human)]
+    #[arg(
+        id = "format",
+        long,
+        global = true,
+        value_enum,
+        default_value_t = OutputFormat::Human
+    )]
     pub format: OutputFormat,
 
     /// SSH connection timeout in seconds
-    #[arg(long, global = true, default_value_t = 5)]
+    #[arg(id = "timeout", long, global = true, default_value_t = 5)]
     pub timeout: u64,
 
     /// Remote xochitl data directory path
     #[arg(
+        id = "data_dir",
         long,
         global = true,
         default_value = "/home/root/.local/share/remarkable/xochitl"
@@ -64,6 +71,60 @@ pub struct GlobalOptions {
     /// Suppress all stderr output
     #[arg(long, global = true)]
     pub quiet: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CliValueSource {
+    CommandLine,
+    EnvVariable,
+    #[default]
+    DefaultValue,
+    Unset,
+}
+
+impl CliValueSource {
+    pub fn is_explicit(self) -> bool {
+        matches!(self, Self::CommandLine | Self::EnvVariable)
+    }
+}
+
+impl From<Option<ValueSource>> for CliValueSource {
+    fn from(value: Option<ValueSource>) -> Self {
+        match value {
+            Some(ValueSource::CommandLine) => Self::CommandLine,
+            Some(ValueSource::EnvVariable) => Self::EnvVariable,
+            Some(ValueSource::DefaultValue) => Self::DefaultValue,
+            Some(_) => Self::DefaultValue,
+            None => Self::Unset,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GlobalOptionSources {
+    pub host: CliValueSource,
+    pub port: CliValueSource,
+    pub user: CliValueSource,
+    pub password: CliValueSource,
+    pub key_file: CliValueSource,
+    pub format: CliValueSource,
+    pub timeout: CliValueSource,
+    pub data_dir: CliValueSource,
+}
+
+impl GlobalOptionSources {
+    pub fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            host: matches.value_source("host").into(),
+            port: matches.value_source("port").into(),
+            user: matches.value_source("user").into(),
+            password: matches.value_source("password").into(),
+            key_file: matches.value_source("key_file").into(),
+            format: matches.value_source("format").into(),
+            timeout: matches.value_source("timeout").into(),
+            data_dir: matches.value_source("data_dir").into(),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]

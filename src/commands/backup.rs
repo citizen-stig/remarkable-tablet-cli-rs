@@ -1,10 +1,11 @@
-use crate::cli::{BackupArgs, GlobalOptions};
-use crate::error::Result;
-use crate::output;
+use crate::cli::BackupArgs;
+use crate::commands::common::CommandContext;
+use crate::error::CliError;
 
 /// # Errors
-/// Currently a stub; never errors. Will return SSH/SFTP errors once implemented.
-pub fn execute(global: &GlobalOptions, _args: &BackupArgs) -> Result<()> {
-    output::print_not_implemented("backup", global.format);
-    Ok(())
+/// Returns `CliError::NotImplemented` until the command is implemented.
+pub async fn execute(_ctx: &CommandContext, _args: &BackupArgs) -> Result<(), CliError> {
+    Err(CliError::NotImplemented(
+        "backup command is not implemented yet".to_string(),
+    ))
 }
