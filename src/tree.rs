@@ -219,27 +219,23 @@ impl DocumentTree {
         if let Parent::Folder(uuid) = parent {
             ancestors.insert(*uuid);
         }
-        self.collect_recursive(
-            parent,
-            0,
-            depth,
-            filter,
-            &mut ancestors,
-            &mut result,
-            matches!(parent, Parent::Root) && filter.includes_trashed(),
-        )?;
+        let children = if matches!(parent, Parent::Root) && filter.includes_trashed() {
+            self.merged_root_and_trash_children(filter.sort_field())
+        } else {
+            self.sorted_direct_children(parent, filter)
+        };
+        self.collect_recursive(children, 0, depth, filter, &mut ancestors, &mut result)?;
         Ok(result)
     }
 
     fn collect_recursive<'a>(
         &'a self,
-        parent: &Parent,
+        entries: Vec<&'a DocumentEntry>,
         current_depth: u32,
         max_depth: Option<u32>,
         filter: ListFilter<'_>,
         ancestors: &mut HashSet<Uuid>,
         result: &mut Vec<(u32, &'a DocumentEntry)>,
-        merge_root_trash: bool,
     ) -> anyhow::Result<()> {
         if let Some(max) = max_depth
             && current_depth >= max
@@ -247,13 +243,7 @@ impl DocumentTree {
             return Ok(());
         }
 
-        let children = if merge_root_trash {
-            self.merged_root_and_trash_children(filter.sort_field())
-        } else {
-            self.sorted_direct_children(parent, filter)
-        };
-
-        for entry in children {
+        for entry in entries {
             if filter.matches(entry) {
                 result.push((current_depth, entry));
             }
@@ -265,13 +255,12 @@ impl DocumentTree {
                     ));
                 }
                 self.collect_recursive(
-                    &Parent::Folder(entry.uuid),
+                    self.sorted_direct_children(&Parent::Folder(entry.uuid), filter),
                     current_depth + 1,
                     max_depth,
                     filter,
                     ancestors,
                     result,
-                    false,
                 )?;
                 ancestors.remove(&entry.uuid);
             }
