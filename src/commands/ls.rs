@@ -64,6 +64,8 @@ pub struct TreeNode {
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "is_false")]
     pub pinned: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_count: Option<u32>,
     pub children: Vec<TreeNode>,
 }
 
@@ -245,6 +247,7 @@ fn build_tree_node(tree: &DocumentTree, target: &Target, args: &LsArgs) -> TreeN
         last_opened,
         tags,
         pinned,
+        page_count: None,
         children,
     }
 }
@@ -286,6 +289,7 @@ fn build_tree_children(
             last_opened: e.last_opened,
             tags: e.tags.clone(),
             pinned: e.pinned,
+            page_count: e.page_count,
             children: if e.is_folder() {
                 build_tree_children(tree, &Parent::Folder(e.uuid), args, current_depth + 1)
             } else {
@@ -357,7 +361,7 @@ fn print_flat_human(items: &[LsItem]) {
                 }
                 n
             };
-            let modified = i.modified.format("%Y-%m-%d").to_string();
+            let modified = i.modified.format("%Y-%m-%d %H:%M:%S").to_string();
             let extras = format_extras(i);
             [type_label, name, modified, extras]
         })
@@ -493,8 +497,11 @@ fn tree_label(node: &TreeNode, is_root: bool) -> String {
     if let Some(t) = type_tag {
         parts.push(t.to_string());
     }
+    if let Some(p) = node.page_count {
+        parts.push(format!("{p}p"));
+    }
     if let Some(opened) = node.last_opened {
-        parts.push(format!("opened: {}", opened.format("%Y-%m-%d")));
+        parts.push(format!("opened: {}", opened.format("%Y-%m-%d %H:%M:%S")));
     }
     if !node.tags.is_empty() {
         parts.push(format!("tags: {}", node.tags.join(", ")));

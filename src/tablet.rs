@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
 
@@ -124,6 +126,10 @@ pub struct LoadDiagnostics {
     pub uuid_metadata_count: usize,
     /// `(filename, error)` for `.metadata` files that failed to parse.
     pub parse_failures: Vec<(String, String)>,
+    /// Wall time spent in the initial `list_dir` SFTP round-trip.
+    pub list_dir_elapsed: Duration,
+    /// Wall time spent reading + parsing `.metadata` and `.content` files.
+    pub read_elapsed: Duration,
 }
 
 /// Load all document/folder metadata from the tablet's xochitl data directory.
@@ -147,10 +153,12 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
 ) -> anyhow::Result<(Vec<DocumentEntry>, LoadDiagnostics)> {
     let mut diag = LoadDiagnostics::default();
 
+    let list_start = Instant::now();
     let dir_entries = conn
         .list_dir(data_dir)
         .await
         .with_context(|| format!("list {data_dir}"))?;
+    diag.list_dir_elapsed = list_start.elapsed();
     diag.dir_entry_count = dir_entries.len();
 
     let uuids: Vec<_> = dir_entries
@@ -161,6 +169,7 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
 
     let mut result = Vec::with_capacity(uuids.len());
 
+    let read_start = Instant::now();
     for uuid in uuids {
         let meta_path = format!("{data_dir}/{uuid}.metadata");
         let meta_bytes = conn
@@ -204,6 +213,7 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
             page_count,
         });
     }
+    diag.read_elapsed = read_start.elapsed();
 
     Ok((result, diag))
 }
