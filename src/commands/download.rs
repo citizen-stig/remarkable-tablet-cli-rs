@@ -2,6 +2,8 @@ use crate::cli::{DownloadArgs, GlobalOptions};
 use crate::error::Result;
 use crate::output;
 
+/// # Errors
+/// Currently a stub; never errors. Will return SSH/SFTP errors once implemented.
 pub fn execute(global: &GlobalOptions, _args: &DownloadArgs) -> Result<()> {
     output::print_not_implemented("download", global.format);
     Ok(())

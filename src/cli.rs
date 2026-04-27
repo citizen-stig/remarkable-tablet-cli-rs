@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::output::OutputFormat;
+use crate::tree::EntryKindFilter;
 
 /// CLI tool for interacting with reMarkable 2 tablet over SSH
 #[derive(Debug, Parser)]
@@ -28,7 +29,7 @@ pub struct GlobalOptions {
     #[arg(long, global = true, default_value = "root")]
     pub user: String,
 
-    /// SSH password (or set REMARKABLE_PASSWORD env var)
+    /// SSH password (or set `REMARKABLE_PASSWORD` env var)
     #[arg(long, global = true, env = "REMARKABLE_PASSWORD")]
     pub password: Option<String>,
 
@@ -128,13 +129,9 @@ pub struct LsArgs {
     #[arg(long)]
     pub tree: bool,
 
-    /// Show only documents
-    #[arg(long, conflicts_with = "folders_only")]
-    pub documents_only: bool,
-
-    /// Show only folders
-    #[arg(long, conflicts_with = "documents_only")]
-    pub folders_only: bool,
+    /// Filter by entry kind
+    #[arg(long, value_enum, default_value_t = EntryKindFilter::All)]
+    pub kind: EntryKindFilter,
 }
 
 #[derive(Debug, Args)]

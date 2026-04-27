@@ -33,6 +33,7 @@ pub enum CliError {
 }
 
 impl CliError {
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Self::ConnectionFailed(_) => "connection_failed",
@@ -47,6 +48,7 @@ impl CliError {
         }
     }
 
+    #[must_use]
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::ConnectionFailed(_) => 1,
@@ -61,6 +63,7 @@ impl CliError {
         }
     }
 
+    #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
         json!({
             "error": true,

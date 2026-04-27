@@ -44,6 +44,9 @@ pub struct SshConnection {
 }
 
 impl SshConnection {
+    /// # Errors
+    /// Returns an error on TCP/DNS failure, connect timeout, authentication failure,
+    /// or if the SFTP subsystem cannot be opened.
     pub async fn connect(host: &str, port: u16, opts: &ConnectOptions) -> anyhow::Result<Self> {
         let addr = format!("{host}:{port}");
         let config = Arc::new(client::Config::default());
@@ -241,7 +244,6 @@ impl TabletConnection for SshConnection {
         while let Some(msg) = channel.wait().await {
             match msg {
                 ChannelMsg::Data { ref data } => buf.extend_from_slice(data),
-                ChannelMsg::ExtendedData { .. } => {}
                 ChannelMsg::ExitStatus { .. } | ChannelMsg::Eof => break,
                 _ => {}
             }

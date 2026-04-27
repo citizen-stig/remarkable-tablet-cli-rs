@@ -12,6 +12,8 @@ pub enum OutputFormat {
     Json,
 }
 
+/// # Panics
+/// Panics if `value` cannot be serialized as JSON (e.g., a non-string map key).
 pub fn print_json<T: Serialize + ?Sized>(value: &T) {
     println!(
         "{}",
@@ -19,6 +21,8 @@ pub fn print_json<T: Serialize + ?Sized>(value: &T) {
     );
 }
 
+/// # Panics
+/// Panics if the error envelope cannot be serialized as JSON.
 pub fn print_error(error: &CliError, format: OutputFormat) {
     match format {
         OutputFormat::Json => {

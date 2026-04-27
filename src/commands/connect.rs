@@ -6,6 +6,8 @@ use crate::error::Result;
 use crate::output;
 use crate::tablet;
 
+/// # Errors
+/// Returns an error if the SSH connection fails or device info cannot be fetched.
 pub async fn execute(global: &GlobalOptions) -> Result<()> {
     run(global).await.map_err(common::to_cli_error)
 }

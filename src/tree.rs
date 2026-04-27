@@ -16,12 +16,13 @@ pub struct DocumentTree {
 }
 
 /// Listing-side filter knobs shared by `list_children` and `list_recursive`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+#[value(rename_all = "lower")]
 pub enum EntryKindFilter {
     #[default]
     All,
-    DocumentsOnly,
-    FoldersOnly,
+    Documents,
+    Folders,
 }
 
 /// Listing-side filter knobs shared by `list_children` and `list_recursive`.
@@ -32,13 +33,14 @@ pub struct ListFilter<'a> {
     sort: Option<&'a SortField>,
 }
 
-impl<'a> Default for ListFilter<'a> {
+impl Default for ListFilter<'_> {
     fn default() -> Self {
         Self::new(EntryKindFilter::All)
     }
 }
 
 impl<'a> ListFilter<'a> {
+    #[must_use]
     pub const fn new(kind: EntryKindFilter) -> Self {
         Self {
             include_trashed: false,
@@ -47,47 +49,56 @@ impl<'a> ListFilter<'a> {
         }
     }
 
+    #[must_use]
     pub const fn all() -> Self {
         Self::new(EntryKindFilter::All)
     }
 
+    #[must_use]
     pub const fn documents_only() -> Self {
-        Self::new(EntryKindFilter::DocumentsOnly)
+        Self::new(EntryKindFilter::Documents)
     }
 
+    #[must_use]
     pub const fn folders_only() -> Self {
-        Self::new(EntryKindFilter::FoldersOnly)
+        Self::new(EntryKindFilter::Folders)
     }
 
+    #[must_use]
     pub const fn include_trashed(mut self) -> Self {
         self.include_trashed = true;
         self
     }
 
+    #[must_use]
     pub const fn with_sort(mut self, sort: &'a SortField) -> Self {
         self.sort = Some(sort);
         self
     }
 
+    #[must_use]
     pub const fn includes_trashed(self) -> bool {
         self.include_trashed
     }
 
+    #[must_use]
     pub const fn sort_field(self) -> Option<&'a SortField> {
         self.sort
     }
 
+    #[must_use]
     pub fn matches(self, entry: &DocumentEntry) -> bool {
         match self.kind {
             EntryKindFilter::All => true,
-            EntryKindFilter::DocumentsOnly => entry.is_document(),
-            EntryKindFilter::FoldersOnly => entry.is_folder(),
+            EntryKindFilter::Documents => entry.is_document(),
+            EntryKindFilter::Folders => entry.is_folder(),
         }
     }
 }
 
 impl DocumentTree {
     /// Build a tree from a flat list of document entries.
+    #[must_use]
     pub fn build(entries: Vec<DocumentEntry>) -> Self {
         let mut by_uuid = HashMap::with_capacity(entries.len());
         let mut children: HashMap<Parent, Vec<Uuid>> = HashMap::new();
@@ -107,6 +118,7 @@ impl DocumentTree {
     }
 
     /// Look up a single entry by UUID.
+    #[must_use]
     pub fn get(&self, uuid: &Uuid) -> Option<&DocumentEntry> {
         self.entries.get(uuid)
     }
@@ -117,6 +129,7 @@ impl DocumentTree {
     }
 
     /// Direct children of the given parent as `DocumentEntry` references.
+    #[must_use]
     pub fn child_entries(&self, parent: &Parent) -> Vec<&DocumentEntry> {
         self.children
             .get(parent)
@@ -125,11 +138,13 @@ impl DocumentTree {
     }
 
     /// Number of direct children.
+    #[must_use]
     pub fn children_count(&self, parent: &Parent) -> usize {
-        self.children.get(parent).map(|v| v.len()).unwrap_or(0)
+        self.children.get(parent).map_or(0, Vec::len)
     }
 
     /// List children of a folder with filters and sorting applied.
+    #[must_use]
     pub fn list_children(&self, parent: &Parent, filter: ListFilter<'_>) -> Vec<&DocumentEntry> {
         let mut result = self.child_entries(parent);
 
@@ -147,7 +162,8 @@ impl DocumentTree {
     /// Returns `(depth_level, entry)` pairs. `depth = None` means unlimited.
     /// `depth = Some(1)` means direct children only.
     ///
-    /// Returns an error when traversal encounters a parent cycle.
+    /// # Errors
+    /// Returns an error if a folder cycle is detected during traversal.
     pub fn list_recursive(
         &self,
         parent: &Parent,
@@ -273,7 +289,7 @@ mod tests {
             parent,
             deleted,
             pinned: false,
-            last_modified: Utc.timestamp_millis_opt(1710000000000).unwrap(),
+            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
             version: 1,
             tags: vec![],
             last_opened: None,
@@ -321,7 +337,7 @@ mod tests {
                 ItemType::Document,
                 Parent::Folder(folder_a_uuid),
                 Some(FileType::Notebook),
-                1710604800000,
+                1_710_604_800_000,
             ),
             make_entry_with_time(
                 DOC_2,
@@ -329,7 +345,7 @@ mod tests {
                 ItemType::Document,
                 Parent::Folder(folder_a_uuid),
                 Some(FileType::Pdf),
-                1710500000000,
+                1_710_500_000_000,
             ),
             make_entry(
                 DOC_3,
@@ -355,6 +371,7 @@ mod tests {
         ]
     }
 
+    #[allow(clippy::similar_names)]
     fn nested_document_entries() -> Vec<DocumentEntry> {
         let folder_a_uuid = Uuid::parse_str(FOLDER_A).unwrap();
         let folder_b_uuid = Uuid::parse_str(FOLDER_B).unwrap();
@@ -567,6 +584,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn list_recursive_errors_on_two_folder_cycle() {
         let folder_a_uuid = Uuid::parse_str(FOLDER_A).unwrap();
         let folder_b_uuid = Uuid::parse_str(FOLDER_B).unwrap();

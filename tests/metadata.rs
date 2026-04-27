@@ -10,7 +10,7 @@ fn fixture_folder_root() {
     assert_eq!(m.parent, Parent::Root);
     assert!(!m.deleted);
     assert!(!m.pinned);
-    assert_eq!(m.last_modified.timestamp_millis(), 1710518400000);
+    assert_eq!(m.last_modified.timestamp_millis(), 1_710_518_400_000);
     assert_eq!(m.version, 1);
     assert!(m.tags.is_empty());
     assert!(m.last_opened.is_none());

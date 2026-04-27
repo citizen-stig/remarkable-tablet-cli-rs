@@ -11,7 +11,7 @@ use crate::error::{CliError, Result};
 use crate::metadata::{DocumentEntry, FileType, Parent};
 use crate::output::{self, OutputFormat};
 use crate::path_resolver::{self, Resolved};
-use crate::tree::{self, DocumentTree, EntryKindFilter, ListFilter};
+use crate::tree::{self, DocumentTree, ListFilter};
 
 #[derive(Serialize, Debug)]
 pub struct LsItem {
@@ -40,6 +40,8 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
 }
 
+// serde's `skip_serializing_if` predicate requires `&T` by value contract.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -50,6 +52,8 @@ pub enum LsOutput {
     Tree(TreeNode),
 }
 
+/// # Errors
+/// Returns an error if connection fails, metadata cannot be loaded, or the path/UUID does not resolve.
 pub async fn execute(global: &GlobalOptions, args: &LsArgs) -> Result<()> {
     run(global, args).await.map_err(common::to_cli_error)
 }
@@ -63,6 +67,8 @@ async fn run(global: &GlobalOptions, args: &LsArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// # Errors
+/// Returns an error if `args.path_or_uuid` does not resolve, or if a folder cycle is detected during recursive traversal.
 pub fn run_with_tree(tree: &DocumentTree, args: &LsArgs) -> anyhow::Result<LsOutput> {
     let target = resolve_target(tree, args)?;
     let filter = filter_from_args(args);
@@ -124,14 +130,7 @@ fn build_flat(tree: &DocumentTree, target: &Target, filter: ListFilter<'_>) -> V
 }
 
 fn filter_from_args(args: &LsArgs) -> ListFilter<'_> {
-    let kind = match (args.documents_only, args.folders_only) {
-        (false, false) => EntryKindFilter::All,
-        (true, false) => EntryKindFilter::DocumentsOnly,
-        (false, true) => EntryKindFilter::FoldersOnly,
-        (true, true) => unreachable!("clap enforces documents_only/folders_only conflicts"),
-    };
-
-    let filter = ListFilter::new(kind);
+    let filter = ListFilter::new(args.kind);
     let filter = if args.include_trashed {
         filter.include_trashed()
     } else {
@@ -200,7 +199,7 @@ fn visible_children<'a>(
 }
 
 fn cycle_error(uuid: Uuid) -> anyhow::Error {
-    anyhow!("cycle detected while traversing folder UUID {}", uuid)
+    anyhow!("cycle detected while traversing folder UUID {uuid}")
 }
 
 fn collect_recursive_items<'a>(
@@ -324,6 +323,7 @@ fn build_tree_node(
     })
 }
 
+#[allow(clippy::redundant_closure_for_method_calls)] // Result::transpose as fn ptr fails E inference here
 fn build_tree_children(
     tree: &DocumentTree,
     parent: &Parent,

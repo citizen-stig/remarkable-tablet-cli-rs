@@ -13,6 +13,9 @@ pub struct FakeConnection {
 }
 
 impl FakeConnection {
+    /// # Panics
+    /// Panics if creating a temp directory for the fake filesystem fails.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             root: tempfile::tempdir().expect("tempdir"),
@@ -26,6 +29,8 @@ impl FakeConnection {
         self.root.path().join(rel)
     }
 
+    /// # Panics
+    /// Panics if creating the parent directory or writing the file fails.
     pub fn set_file(&self, path: &str, data: impl AsRef<[u8]>) {
         let p = self.local(path);
         if let Some(parent) = p.parent() {
@@ -34,10 +39,14 @@ impl FakeConnection {
         std::fs::write(&p, data.as_ref()).unwrap();
     }
 
+    /// # Panics
+    /// Panics if directory creation fails.
     pub fn mkdir(&self, path: &str) {
         std::fs::create_dir_all(self.local(path)).unwrap();
     }
 
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
     pub fn set_command_output(&self, cmd_substring: &str, output: &str) {
         let mut cmds = self.commands.lock().unwrap();
         if let Some(entry) = cmds.iter_mut().find(|(s, _)| s == cmd_substring) {
@@ -47,6 +56,8 @@ impl FakeConnection {
         }
     }
 
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
     pub fn set_read_error(&self, path: &str, message: &str) {
         self.read_errors
             .lock()

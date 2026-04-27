@@ -5,7 +5,7 @@ use remarkable_tablet_cli_rs::connection::FakeConnection;
 use remarkable_tablet_cli_rs::error::CliError;
 use remarkable_tablet_cli_rs::metadata::{DocumentEntry, FileType, ItemKind, ItemType, Parent};
 use remarkable_tablet_cli_rs::tablet::load_all_metadata;
-use remarkable_tablet_cli_rs::tree::DocumentTree;
+use remarkable_tablet_cli_rs::tree::{DocumentTree, EntryKindFilter};
 use uuid::Uuid;
 
 const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
@@ -83,8 +83,7 @@ fn ls_args() -> LsArgs {
         include_trashed: false,
         sort: None,
         tree: false,
-        documents_only: false,
-        folders_only: false,
+        kind: EntryKindFilter::All,
     }
 }
 
@@ -136,7 +135,7 @@ fn make_entry(
         parent,
         deleted,
         pinned: false,
-        last_modified: Utc.timestamp_millis_opt(1710000000000).unwrap(),
+        last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
         version: 1,
         tags: vec![],
         last_opened: None,
@@ -220,7 +219,7 @@ async fn ls_documents_only() {
     let conn = setup_fake_tablet();
     let tree = build_tree(&conn).await;
     let mut args = ls_args();
-    args.documents_only = true;
+    args.kind = EntryKindFilter::Documents;
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
     let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     assert_eq!(names, vec!["Quick Read"]);
@@ -231,7 +230,7 @@ async fn ls_folders_only() {
     let conn = setup_fake_tablet();
     let tree = build_tree(&conn).await;
     let mut args = ls_args();
-    args.folders_only = true;
+    args.kind = EntryKindFilter::Folders;
     let items = flat(ls::run_with_tree(&tree, &args).unwrap());
     let names: Vec<_> = items.iter().map(|i| i.entry.name.as_str()).collect();
     assert_eq!(names, vec!["Work"]);
@@ -717,7 +716,7 @@ async fn find_filters_by_type() {
     let folders = find::run_with_tree(
         &tree,
         &FindArgs {
-            pattern: "".into(),
+            pattern: String::new(),
             item_type: Some(FindTypeFilter::Folder),
             case_sensitive: false,
         },
@@ -730,7 +729,7 @@ async fn find_filters_by_type() {
     let docs = find::run_with_tree(
         &tree,
         &FindArgs {
-            pattern: "".into(),
+            pattern: String::new(),
             item_type: Some(FindTypeFilter::Document),
             case_sensitive: false,
         },

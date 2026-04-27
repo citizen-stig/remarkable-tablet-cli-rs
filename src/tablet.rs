@@ -29,6 +29,7 @@ pub enum ConnectionType {
 }
 
 impl ConnectionType {
+    #[must_use]
     pub fn for_host(host: &str) -> Self {
         if host == USB_HOST {
             Self::Usb
@@ -58,6 +59,8 @@ pub struct DeviceInfo {
     pub disk_free_mb: u64,
 }
 
+/// # Errors
+/// Returns an error if any of the firmware, battery, or disk-stat shell calls fails.
 pub async fn fetch_device_info<C: TabletConnection>(
     conn: &C,
     host: &str,
@@ -178,6 +181,9 @@ pub struct LoadDiagnostics {
 /// Entries that fail to parse are silently skipped so one corrupt file
 /// doesn't prevent listing the rest, but metadata read failures abort
 /// the load to avoid returning a partial tree.
+///
+/// # Errors
+/// Returns an error if `data_dir` cannot be listed.
 pub async fn load_all_metadata<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
@@ -188,6 +194,9 @@ pub async fn load_all_metadata<C: TabletConnection>(
 /// Same as [`load_all_metadata`] but also returns counters and per-file
 /// parse errors for diagnostics. Use this when you want to surface why a
 /// listing came up empty.
+///
+/// # Errors
+/// Returns an error if `data_dir` cannot be listed.
 pub async fn load_all_metadata_full<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
@@ -225,7 +234,7 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
             LoadOutcome::Entry(e) => result.push(e),
             LoadOutcome::MetadataParseFail(file, err) => diag.parse_failures.push((file, err)),
             LoadOutcome::ContentReadFail(uuid, err) | LoadOutcome::ContentParseFail(uuid, err) => {
-                diag.content_failures.push((uuid, err))
+                diag.content_failures.push((uuid, err));
             }
         }
     }

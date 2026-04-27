@@ -1,3 +1,8 @@
+// The `if cli.x != DEFAULT { cli.x } else { file.x }` precedence pattern below
+// reads naturally as "if the user set the CLI flag, use it; else fall back to file".
+// Inverting to the `==` form fights the precedence comment; allow the lint instead.
+#![allow(clippy::if_not_else)]
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -40,6 +45,7 @@ pub struct ResolvedConfig {
     pub quiet: bool,
 }
 
+#[must_use]
 pub fn default_config_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| {
         PathBuf::from(h)
@@ -49,6 +55,8 @@ pub fn default_config_path() -> Option<PathBuf> {
     })
 }
 
+/// # Errors
+/// Returns an error if the config file exists but cannot be read or parsed as TOML.
 pub fn load_file_config(path: Option<&Path>) -> anyhow::Result<FileConfig> {
     let target = match path {
         Some(p) => Some(p.to_path_buf()),
@@ -64,6 +72,7 @@ pub fn load_file_config(path: Option<&Path>) -> anyhow::Result<FileConfig> {
     toml::from_str(&raw).with_context(|| format!("parse {}", p.display()))
 }
 
+#[must_use]
 pub fn resolve(cli: &GlobalOptions, file: &FileConfig) -> ResolvedConfig {
     // Precedence (per field): CLI > env > file > built-in default.
     // For non-optional clap fields, the default is the built-in — so if the

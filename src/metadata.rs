@@ -106,6 +106,9 @@ fn json_value_to_epoch_ms<E: serde::de::Error>(v: serde_json::Value) -> Result<O
             if let Some(i) = n.as_i64() {
                 Ok(Some(i))
             } else if let Some(f) = n.as_f64() {
+                // Older firmware emits epoch-ms as a float; integer truncation is acceptable
+                // since the original value is whole and within i64 range.
+                #[allow(clippy::cast_possible_truncation)]
                 Ok(Some(f as i64))
             } else {
                 Err(E::custom(format!("unrepresentable number {n}")))
@@ -162,6 +165,8 @@ fn default_parent_root() -> Parent {
     Parent::Root
 }
 
+// serde's `serialize_with` predicate requires `&Option<T>` by signature contract.
+#[allow(clippy::ref_option)]
 fn serialize_option_epoch_ms<S: Serializer>(
     dt: &Option<DateTime<Utc>>,
     serializer: S,
@@ -237,9 +242,10 @@ pub struct RawContent {
 impl RawContent {
     /// Best-effort page count: prefer the explicit `pageCount` field; fall
     /// back to the length of the `pages` array; otherwise `None`.
+    #[must_use]
     pub fn effective_page_count(&self) -> Option<u32> {
         self.page_count
-            .or_else(|| self.pages.as_ref().map(|p| p.len() as u32))
+            .or_else(|| self.pages.as_ref().and_then(|p| u32::try_from(p.len()).ok()))
     }
 }
 
@@ -266,26 +272,32 @@ pub struct DocumentEntry {
 }
 
 impl DocumentEntry {
+    #[must_use]
     pub fn is_root_child(&self) -> bool {
         self.parent == Parent::Root
     }
 
+    #[must_use]
     pub fn is_trashed(&self) -> bool {
         self.parent == Parent::Trash || self.deleted
     }
 
+    #[must_use]
     pub fn is_folder(&self) -> bool {
         matches!(self.kind, ItemKind::Folder)
     }
 
+    #[must_use]
     pub fn is_document(&self) -> bool {
         matches!(self.kind, ItemKind::Document { .. })
     }
 
+    #[must_use]
     pub fn is_template(&self) -> bool {
         matches!(self.kind, ItemKind::Template)
     }
 
+    #[must_use]
     pub fn file_type(&self) -> Option<FileType> {
         match self.kind {
             ItemKind::Document { file_type, .. } => Some(file_type),
@@ -293,6 +305,7 @@ impl DocumentEntry {
         }
     }
 
+    #[must_use]
     pub fn page_count(&self) -> Option<u32> {
         match self.kind {
             ItemKind::Document { page_count, .. } => page_count,
@@ -301,6 +314,7 @@ impl DocumentEntry {
     }
 
     /// UUID of the parent folder, or `None` for root-level and trashed items.
+    #[must_use]
     pub fn parent_uuid(&self) -> Option<Uuid> {
         match self.parent {
             Parent::Folder(u) => Some(u),
@@ -309,6 +323,7 @@ impl DocumentEntry {
     }
 
     /// Sort key for ordering by type: folders < notebooks < PDFs < ePubs < templates.
+    #[must_use]
     pub fn type_sort_key(&self) -> u8 {
         match self.kind {
             ItemKind::Folder => 0,
@@ -333,16 +348,21 @@ impl DocumentEntry {
 // Parsing helpers
 // ---------------------------------------------------------------------------
 
+/// # Errors
+/// Returns an error if `data` is not valid JSON or does not match the metadata schema.
 pub fn parse_metadata(data: &[u8]) -> anyhow::Result<RawMetadata> {
     Ok(serde_json::from_slice(data)?)
 }
 
+/// # Errors
+/// Returns an error if `data` is not valid JSON or does not match the content schema.
 pub fn parse_content(data: &[u8]) -> anyhow::Result<RawContent> {
     Ok(serde_json::from_slice(data)?)
 }
 
 /// Extract a UUID from a filename like `"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.metadata"`.
 /// Returns `None` if the filename doesn't end with `.metadata` or the stem isn't a valid UUID.
+#[must_use]
 pub fn extract_uuid(filename: &str) -> Option<Uuid> {
     let stem = filename.strip_suffix(".metadata")?;
     Uuid::parse_str(stem).ok()
@@ -446,14 +466,14 @@ mod tests {
         );
         assert!(!m.deleted);
         assert!(m.pinned);
-        assert_eq!(m.last_modified.timestamp_millis(), 1710518400000);
+        assert_eq!(m.last_modified.timestamp_millis(), 1_710_518_400_000);
         assert_eq!(
             m.metadata_modified.unwrap().timestamp_millis(),
-            1710518400000
+            1_710_518_400_000
         );
         assert_eq!(m.version, 1);
         assert_eq!(m.tags, vec!["work", "meetings"]);
-        assert_eq!(m.last_opened.unwrap().timestamp_millis(), 1710604800000);
+        assert_eq!(m.last_opened.unwrap().timestamp_millis(), 1_710_604_800_000);
     }
 
     #[test]
@@ -471,12 +491,12 @@ mod tests {
             "lastOpened": "1742725999999"
         }"#;
         let m = parse_metadata(json.as_bytes()).unwrap();
-        assert_eq!(m.last_modified.timestamp_millis(), 1742725761861);
+        assert_eq!(m.last_modified.timestamp_millis(), 1_742_725_761_861);
         assert_eq!(
             m.metadata_modified.unwrap().timestamp_millis(),
-            1742725761862
+            1_742_725_761_862
         );
-        assert_eq!(m.last_opened.unwrap().timestamp_millis(), 1742725999999);
+        assert_eq!(m.last_opened.unwrap().timestamp_millis(), 1_742_725_999_999);
     }
 
     #[test]
@@ -549,7 +569,7 @@ mod tests {
             "version": 1
         }"#;
         let m = parse_metadata(json.as_bytes()).unwrap();
-        assert_eq!(m.last_modified.timestamp_millis(), 1742725761861);
+        assert_eq!(m.last_modified.timestamp_millis(), 1_742_725_761_861);
     }
 
     #[test]

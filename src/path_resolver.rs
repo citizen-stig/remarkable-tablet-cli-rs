@@ -17,8 +17,10 @@ pub enum Resolved<'a> {
 /// - `"/"` resolves to `Resolved::Root`.
 /// - `"/trash/<name>"` resolves within the virtual trash container.
 /// - Each path segment is matched against `visible_name` at the current level.
-/// - Returns `CliError::NotFound` if a segment has no match.
-/// - Returns an error if duplicate `visible_name` values exist at the same level.
+///
+/// # Errors
+/// Returns an error if `path` does not start with `'/'`, a segment has no match,
+/// an intermediate segment is not a folder, or two siblings share the same name.
 pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Resolved<'a>> {
     if !path.starts_with('/') {
         return Err(CliError::InvalidPath(format!("path must start with '/': {path}")).into());
@@ -86,6 +88,10 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
 ///
 /// Walks the parent chain upward. Returns `"/trash/..."` for trashed items.
 /// Caps at 100 levels to guard against cycles.
+///
+/// # Errors
+/// Returns an error if `uuid` is not in the tree, an ancestor's parent UUID is
+/// missing, or the parent chain exceeds 100 levels (suggesting a cycle).
 pub fn resolve_uuid_to_path(tree: &DocumentTree, uuid: &Uuid) -> anyhow::Result<String> {
     let mut parts = Vec::new();
     let mut current = tree
@@ -121,6 +127,10 @@ pub fn resolve_uuid_to_path(tree: &DocumentTree, uuid: &Uuid) -> anyhow::Result<
 /// Tries `Uuid::parse_str` first. If valid, looks up in the tree.
 /// Otherwise treats the input as a human-readable path.
 /// `"/"` always resolves to `Resolved::Root`.
+///
+/// # Errors
+/// Returns an error if `input` is a syntactically valid UUID that is not in the tree,
+/// or if it is a path that fails to resolve (see [`resolve_path`]).
 pub fn resolve<'a>(tree: &'a DocumentTree, input: &str) -> anyhow::Result<Resolved<'a>> {
     if input == "/" {
         return Ok(Resolved::Root);
@@ -174,7 +184,7 @@ mod tests {
             parent,
             deleted,
             pinned: false,
-            last_modified: Utc.timestamp_millis_opt(1710000000000).unwrap(),
+            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
             version: 1,
             tags: vec![],
             last_opened: None,

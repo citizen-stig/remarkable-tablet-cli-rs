@@ -9,6 +9,8 @@ use crate::tree::DocumentTree;
 
 pub type FindItem = EntryView;
 
+/// # Errors
+/// Returns an error if connection fails, metadata cannot be loaded, or the pattern is an invalid glob.
 pub async fn execute(global: &GlobalOptions, args: &FindArgs) -> Result<()> {
     run(global, args).await.map_err(common::to_cli_error)
 }
@@ -22,6 +24,8 @@ async fn run(global: &GlobalOptions, args: &FindArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// # Errors
+/// Returns an error if `args.pattern` contains glob metacharacters but isn't a valid glob.
 pub fn run_with_tree(tree: &DocumentTree, args: &FindArgs) -> anyhow::Result<Vec<FindItem>> {
     let matcher = build_matcher(&args.pattern, args.case_sensitive)?;
     let type_filter = args.item_type.as_ref();

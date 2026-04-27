@@ -18,6 +18,8 @@ pub struct InfoOutput {
     pub content: Option<serde_json::Value>,
 }
 
+/// # Errors
+/// Returns an error if connection fails, metadata cannot be loaded, or the path/UUID does not resolve.
 pub async fn execute(global: &GlobalOptions, args: &InfoArgs) -> Result<()> {
     run(global, args).await.map_err(common::to_cli_error)
 }
@@ -31,6 +33,9 @@ async fn run(global: &GlobalOptions, args: &InfoArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// # Errors
+/// Returns an error if `args.path_or_uuid` does not resolve, or if the entry's
+/// `.metadata` / `.content` files cannot be fetched or parsed.
 pub async fn run_with_conn<C: TabletConnection>(
     conn: &C,
     data_dir: &str,

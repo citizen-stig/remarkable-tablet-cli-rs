@@ -18,6 +18,8 @@ use crate::path_resolver;
 use crate::tablet::{self};
 use crate::tree::DocumentTree;
 
+// serde's `skip_serializing_if` predicate requires `&T` by value contract.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -45,6 +47,7 @@ pub struct EntryView {
 }
 
 impl EntryView {
+    #[must_use]
     pub fn from_entry(tree: &DocumentTree, entry: &DocumentEntry) -> Self {
         Self {
             uuid: entry.uuid,
@@ -62,6 +65,7 @@ impl EntryView {
 }
 
 /// Single-word label for an entry's kind. Used by `ls` flat output and `find`.
+#[must_use]
 pub fn type_label(kind: &ItemKind) -> &'static str {
     match kind {
         ItemKind::Folder => "folder",
@@ -83,6 +87,7 @@ pub fn type_label(kind: &ItemKind) -> &'static str {
 
 /// File-type-only label, for callers that render kind and file type separately
 /// (e.g., `info`'s human output).
+#[must_use]
 pub fn file_type_label(file_type: FileType) -> &'static str {
     match file_type {
         FileType::Pdf => "pdf",
@@ -93,6 +98,7 @@ pub fn file_type_label(file_type: FileType) -> &'static str {
 
 /// Resolve `entry`'s full path, falling back to a top-level synthetic path on
 /// resolver failure (broken parent chain or missing intermediate folder).
+#[must_use]
 pub fn entry_path(tree: &DocumentTree, entry: &DocumentEntry) -> String {
     path_resolver::resolve_uuid_to_path(tree, &entry.uuid)
         .unwrap_or_else(|_| format!("/{}", entry.visible_name))
@@ -105,8 +111,11 @@ const USB_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// Resolve config, discover the tablet host, and open an SSH session.
 ///
 /// Returns the live `SshConnection` plus the merged config so callers can
-/// reuse derived values (data_dir, format, etc.). Caller is responsible for
+/// reuse derived values (`data_dir`, format, etc.). Caller is responsible for
 /// `ssh.disconnect().await` when finished.
+///
+/// # Errors
+/// Returns an error if host discovery, SSH authentication, or SFTP subsystem startup fails.
 pub async fn connect(global: &GlobalOptions) -> anyhow::Result<(SshConnection, ResolvedConfig)> {
     let file_cfg = config::load_file_config(None).unwrap_or_default();
     let mut resolved = config::resolve(global, &file_cfg);
@@ -134,6 +143,9 @@ pub async fn connect(global: &GlobalOptions) -> anyhow::Result<(SshConnection, R
 ///
 /// Convenience for read-only browse commands. Caller is responsible for
 /// `ssh.disconnect().await` when finished with the connection.
+///
+/// # Errors
+/// Returns an error if connection fails or any `.metadata` file cannot be read or parsed.
 pub async fn connect_and_load_tree(
     global: &GlobalOptions,
 ) -> anyhow::Result<(SshConnection, ResolvedConfig, DocumentTree)> {
@@ -166,6 +178,7 @@ pub async fn connect_and_load_tree(
 
 /// Downcast an `anyhow::Error` to `CliError`, falling back to `IoError` so
 /// any unstructured failure still produces a usable JSON envelope.
+#[must_use]
 pub fn to_cli_error(err: anyhow::Error) -> CliError {
     match err.downcast::<CliError>() {
         Ok(cli) => cli,
