@@ -86,12 +86,12 @@ async fn fetch_firmware<C: TabletConnection>(conn: &C) -> anyhow::Result<String>
 async fn fetch_battery<C: TabletConnection>(conn: &C) -> anyhow::Result<u32> {
     let root = "/sys/class/power_supply";
     let entries = conn
-        .list_dir(root)
+        .read_dir(root)
         .await
         .with_context(|| format!("list {root}"))?;
     let mut last_err: Option<anyhow::Error> = None;
-    for name in entries {
-        let cap_path = format!("{root}/{name}/capacity");
+    for entry in entries {
+        let cap_path = format!("{root}/{}/capacity", entry.name);
         match conn.read_file(&cap_path).await {
             Ok(raw) => {
                 let s = String::from_utf8(raw).context("capacity not UTF-8")?;

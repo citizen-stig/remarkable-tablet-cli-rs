@@ -7,6 +7,8 @@ pub mod error;
 pub mod metadata;
 pub mod metadata_loader;
 pub mod output;
+pub mod page_range;
 pub mod path_resolver;
 pub mod tablet;
+pub mod transfer;
 pub mod tree;

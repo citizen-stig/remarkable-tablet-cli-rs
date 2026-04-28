@@ -90,7 +90,7 @@ impl ParsedCli {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{BackupArgs, GlobalOptions};
+    use crate::cli::GlobalOptions;
     use crate::config::{
         DEFAULT_DATA_DIR, DEFAULT_KEY_FILE, DEFAULT_PORT, DEFAULT_TIMEOUT_SECS, DEFAULT_USER,
     };
@@ -137,21 +137,5 @@ mod tests {
 
         let ctx = build_context(&base_global(), &default_sources(), Some(&path)).unwrap();
         assert_eq!(ctx.format(), output::OutputFormat::Json);
-    }
-
-    #[tokio::test]
-    async fn stub_commands_fail_with_not_implemented() {
-        let ctx = build_context(&base_global(), &default_sources(), None).unwrap();
-        let err = commands::backup::execute(
-            &ctx,
-            &BackupArgs {
-                local_dir: "tmp".to_string(),
-                incremental: false,
-                dry_run: false,
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, crate::error::CliError::NotImplemented(_)));
     }
 }

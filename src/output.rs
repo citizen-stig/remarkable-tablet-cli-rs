@@ -129,10 +129,7 @@ mod tests {
     #[test]
     fn render_error_json_codes_match_variants() {
         for (err, code) in [
-            (
-                CliError::ConnectionFailed("x".into()),
-                "connection_failed",
-            ),
+            (CliError::ConnectionFailed("x".into()), "connection_failed"),
             (CliError::AuthFailed("x".into()), "auth_failed"),
             (CliError::NotFound("x".into()), "not_found"),
             (CliError::AlreadyExists("x".into()), "already_exists"),

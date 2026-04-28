@@ -184,7 +184,9 @@ async fn info_document_human() {
     let args = InfoArgs {
         path_or_uuid: "/Work/Meeting Notes".to_string(),
     };
-    let out = info::run_with_conn(&conn, DATA_DIR, &tree, &args).await.unwrap();
+    let out = info::run_with_conn(&conn, DATA_DIR, &tree, &args)
+        .await
+        .unwrap();
     assert_snapshot!(info::format_output(&out, OutputFormat::Human));
 }
 
@@ -195,7 +197,9 @@ async fn info_document_json() {
     let args = InfoArgs {
         path_or_uuid: "/Work/Meeting Notes".to_string(),
     };
-    let out = info::run_with_conn(&conn, DATA_DIR, &tree, &args).await.unwrap();
+    let out = info::run_with_conn(&conn, DATA_DIR, &tree, &args)
+        .await
+        .unwrap();
     assert_snapshot!(info::format_output(&out, OutputFormat::Json));
 }
 
@@ -206,7 +210,9 @@ async fn info_folder_human() {
     let args = InfoArgs {
         path_or_uuid: "/Work".to_string(),
     };
-    let out = info::run_with_conn(&conn, DATA_DIR, &tree, &args).await.unwrap();
+    let out = info::run_with_conn(&conn, DATA_DIR, &tree, &args)
+        .await
+        .unwrap();
     assert_snapshot!(info::format_output(&out, OutputFormat::Human));
 }
 
@@ -217,7 +223,9 @@ async fn info_pinned_epub_human() {
     let args = InfoArgs {
         path_or_uuid: "/Quick Read".to_string(),
     };
-    let out = info::run_with_conn(&conn, DATA_DIR, &tree, &args).await.unwrap();
+    let out = info::run_with_conn(&conn, DATA_DIR, &tree, &args)
+        .await
+        .unwrap();
     assert_snapshot!(info::format_output(&out, OutputFormat::Human));
 }
 

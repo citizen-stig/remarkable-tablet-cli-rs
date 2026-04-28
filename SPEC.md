@@ -267,15 +267,15 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 
 ## 7. Task Breakdown
 
-### Phase 1: Foundation
+### +Phase 1: Foundation
 1. + **Project scaffolding + CLI skeleton** — Cargo.toml deps, clap derive structs for all commands, main.rs dispatch, output.rs, error.rs. Deliverable: `remarkable-cli --help` works for all subcommands.
 2. + **`TabletConnection` trait + SSH implementation + config** — connection.rs (trait + `SshConnection`), config.rs, `FakeConnection` for tests. Deliverable: `remarkable-cli connect` works.
-3. ~ **Metadata parsing + document tree** — metadata.rs serde structs, tablet.rs (read all metadata via trait), tree.rs, path_resolver.rs + unit tests using fixtures. Deliverable: internal library represents full document tree.
-4. **Browse commands** — `ls` (with `--tree`/`--recursive`), `info`, `find`. Deliverable: full read-only browsing with tests.
+3. + **Metadata parsing + document tree** — metadata.rs serde structs, tablet.rs (read all metadata via trait), tree.rs, path_resolver.rs + unit tests using fixtures. Deliverable: internal library represents full document tree.
+4. + **Browse commands** — `ls` (with `--tree`/`--recursive`), `info`, `find`. Deliverable: full read-only browsing with tests.
 
-### Phase 2: Data Transfer
-5. **Backup** — SFTP recursive copy, incremental mode, manifest. Deliverable: `remarkable-cli backup ./backups`.
-6. **Download** — Single document fetch. Deliverable: `remarkable-cli download <uuid> --output ./doc.pdf`.
+### ~Phase 2: Data Transfer
+5. ~**Backup** — SFTP recursive copy, incremental mode, manifest. Deliverable: `remarkable-cli backup ./backups`.
+6. ~**Download** — Single document fetch. Deliverable: `remarkable-cli download <uuid> --output ./doc.pdf`.
 7. **Upload** — UUID generation, metadata creation, file transfer, xochitl restart. Deliverable: `remarkable-cli upload paper.pdf --parent /Research`.
 
 ### Phase 3: File Organization

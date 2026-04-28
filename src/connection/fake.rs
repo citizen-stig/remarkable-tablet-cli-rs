@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use anyhow::{Context, anyhow, bail};
 use tempfile::TempDir;
 
-use super::TabletConnection;
+use super::{RemoteEntry, RemoteFileKind, RemoteMetadata, TabletConnection};
 
 pub struct FakeConnection {
     root: TempDir,
@@ -37,6 +38,21 @@ impl FakeConnection {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(&p, data.as_ref()).unwrap();
+    }
+
+    /// Like [`set_file`](Self::set_file) but also forces the file's mtime.
+    /// Tests use this to construct deterministic before/after states for
+    /// `--incremental` backup logic, which can't be done with the
+    /// near-`now()` mtimes that `std::fs::write` produces.
+    ///
+    /// # Panics
+    /// Panics if creating the parent directory, writing the file, or
+    /// applying the mtime fails.
+    pub fn set_file_with_mtime(&self, path: &str, data: impl AsRef<[u8]>, mtime: SystemTime) {
+        self.set_file(path, data);
+        let p = self.local(path);
+        filetime::set_file_mtime(&p, filetime::FileTime::from_system_time(mtime))
+            .expect("set mtime");
     }
 
     /// # Panics
@@ -91,17 +107,29 @@ impl TabletConnection for FakeConnection {
         std::fs::write(&p, data).with_context(|| format!("fake write_file {}", p.display()))
     }
 
-    async fn list_dir(&self, path: &str) -> anyhow::Result<Vec<String>> {
+    async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<RemoteEntry>> {
         let p = self.local(path);
         let entries =
-            std::fs::read_dir(&p).with_context(|| format!("fake list_dir {}", p.display()))?;
+            std::fs::read_dir(&p).with_context(|| format!("fake read_dir {}", p.display()))?;
         let mut out = Vec::new();
         for e in entries {
             let e = e?;
-            out.push(e.file_name().to_string_lossy().into_owned());
+            let meta = e
+                .metadata()
+                .with_context(|| format!("fake read_dir metadata for {}", e.path().display()))?;
+            out.push(RemoteEntry {
+                name: e.file_name().to_string_lossy().into_owned(),
+                metadata: into_remote_metadata(&meta),
+            });
         }
-        out.sort();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
+    }
+
+    async fn stat(&self, path: &str) -> anyhow::Result<RemoteMetadata> {
+        let p = self.local(path);
+        let meta = std::fs::metadata(&p).with_context(|| format!("fake stat {}", p.display()))?;
+        Ok(into_remote_metadata(&meta))
     }
 
     async fn remove_file(&self, path: &str) -> anyhow::Result<()> {
@@ -121,5 +149,20 @@ impl TabletConnection for FakeConnection {
 
     async fn file_exists(&self, path: &str) -> anyhow::Result<bool> {
         Ok(self.local(path).exists())
+    }
+}
+
+fn into_remote_metadata(meta: &std::fs::Metadata) -> RemoteMetadata {
+    let kind = if meta.is_dir() {
+        RemoteFileKind::Dir
+    } else if meta.is_file() {
+        RemoteFileKind::File
+    } else {
+        RemoteFileKind::Other
+    };
+    RemoteMetadata {
+        size: Some(meta.len()),
+        mtime: meta.modified().ok(),
+        kind,
     }
 }

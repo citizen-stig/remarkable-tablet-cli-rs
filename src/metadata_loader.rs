@@ -61,7 +61,7 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
 
     let list_start = Instant::now();
     let dir_entries = conn
-        .list_dir(data_dir)
+        .read_dir(data_dir)
         .await
         .with_context(|| format!("list {data_dir}"))?;
     diag.list_dir_elapsed = list_start.elapsed();
@@ -69,7 +69,7 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
 
     let uuids: Vec<_> = dir_entries
         .iter()
-        .filter_map(|name| metadata::extract_uuid(name))
+        .filter_map(|entry| metadata::extract_uuid(&entry.name))
         .collect();
     diag.uuid_metadata_count = uuids.len();
 

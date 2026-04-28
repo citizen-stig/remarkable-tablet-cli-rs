@@ -1,6 +1,9 @@
+use std::path::PathBuf;
+
 use clap::{ArgMatches, Args, Parser, Subcommand, ValueEnum, parser::ValueSource};
 
 use crate::output::OutputFormat;
+use crate::page_range::PageSelection;
 use crate::tree::EntryKindFilter;
 
 /// CLI tool for interacting with reMarkable 2 tablet over SSH
@@ -217,14 +220,19 @@ pub struct FindArgs {
 
 #[derive(Debug, Args)]
 pub struct BackupArgs {
-    /// Local directory to save backup
-    pub local_dir: String,
+    /// Local directory to save backup. The xochitl tree is copied under
+    /// `<local_dir>/xochitl/`; the firmware version goes alongside as
+    /// `<local_dir>/version`. Pre-existing local files outside the tree
+    /// are left untouched (this is a backup, not a sync).
+    pub local_dir: PathBuf,
 
-    /// Only copy files newer than existing backup
+    /// Only copy files whose remote mtime is newer than the local copy.
+    /// First-run behaviour (target dir absent) is identical to a full
+    /// backup.
     #[arg(long)]
     pub incremental: bool,
 
-    /// Show what would be copied without copying
+    /// Print the planned set of files without writing anything.
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -234,13 +242,16 @@ pub struct DownloadArgs {
     /// Path or UUID of the document to download
     pub path_or_uuid: String,
 
-    /// Output path (default: ./<visibleName>.<ext>)
+    /// Output path. For PDF/ePub a file path (default `./<name>.<ext>`);
+    /// for notebooks a directory path (default `./<name>/`). Refuses to
+    /// overwrite an existing destination.
     #[arg(long)]
-    pub output: Option<String>,
+    pub output: Option<PathBuf>,
 
-    /// Page range for notebooks (e.g., "1-5" or "1,3,7")
+    /// Page range for notebooks (e.g., "1-5" or "1,3,7"). 1-indexed.
+    /// Invalid for PDF/ePub.
     #[arg(long)]
-    pub pages: Option<String>,
+    pub pages: Option<PageSelection>,
 }
 
 #[derive(Debug, Args)]

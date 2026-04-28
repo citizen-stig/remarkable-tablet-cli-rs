@@ -1,16 +1,18 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Context, anyhow};
 use russh::client::{self, Handle};
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKey, load_secret_key};
 use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
+use russh_sftp::client::fs::Metadata;
+use russh_sftp::protocol::FileType as SftpFileType;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-use super::TabletConnection;
+use super::{RemoteEntry, RemoteFileKind, RemoteMetadata, TabletConnection};
 
 pub struct ConnectOptions {
     pub user: String,
@@ -192,6 +194,20 @@ fn verbose(opts: &ConnectOptions, msg: &str) {
     }
 }
 
+fn into_remote_metadata(meta: &Metadata) -> RemoteMetadata {
+    RemoteMetadata {
+        size: meta.size,
+        mtime: meta
+            .mtime
+            .map(|secs| UNIX_EPOCH + Duration::from_secs(u64::from(secs))),
+        kind: match meta.file_type() {
+            SftpFileType::Dir => RemoteFileKind::Dir,
+            SftpFileType::File => RemoteFileKind::File,
+            SftpFileType::Symlink | SftpFileType::Other => RemoteFileKind::Other,
+        },
+    }
+}
+
 impl TabletConnection for SshConnection {
     async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>> {
         self.sftp
@@ -207,20 +223,27 @@ impl TabletConnection for SshConnection {
             .with_context(|| format!("sftp write {path}"))
     }
 
-    async fn list_dir(&self, path: &str) -> anyhow::Result<Vec<String>> {
+    async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<RemoteEntry>> {
         let dir = self
             .sftp
             .read_dir(path)
             .await
             .with_context(|| format!("sftp read_dir {path}"))?;
-        let mut out = Vec::new();
-        for entry in dir {
-            let name = entry.file_name();
-            if name != "." && name != ".." {
-                out.push(name);
-            }
-        }
-        Ok(out)
+        Ok(dir
+            .map(|entry| RemoteEntry {
+                name: entry.file_name(),
+                metadata: into_remote_metadata(&entry.metadata()),
+            })
+            .collect())
+    }
+
+    async fn stat(&self, path: &str) -> anyhow::Result<RemoteMetadata> {
+        let meta = self
+            .sftp
+            .metadata(path)
+            .await
+            .with_context(|| format!("sftp stat {path}"))?;
+        Ok(into_remote_metadata(&meta))
     }
 
     async fn remove_file(&self, path: &str) -> anyhow::Result<()> {
