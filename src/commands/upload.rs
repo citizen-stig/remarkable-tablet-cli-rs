@@ -17,7 +17,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::cli::UploadArgs;
-use crate::commands::common::{self, CommandContext};
+use crate::commands::common::{self, CommandContext, is_false};
 use crate::connection::TabletConnection;
 use crate::error::CliError;
 use crate::metadata::{FileType, ItemType, Parent, RawContent, RawMetadata};
@@ -50,11 +50,6 @@ pub struct UploadedDocument {
     pub size_bytes: u64,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_false(b: &bool) -> bool {
-    !*b
-}
-
 /// Per-file work item built up during validation and consumed by the write
 /// loop.
 struct Plan {
@@ -63,6 +58,18 @@ struct Plan {
     file_type: FileType,
     source_path: PathBuf,
     size_bytes: u64,
+}
+
+impl From<Plan> for UploadedDocument {
+    fn from(p: Plan) -> Self {
+        Self {
+            uuid: p.uuid,
+            name: p.name,
+            file_type: p.file_type,
+            source_path: p.source_path,
+            size_bytes: p.size_bytes,
+        }
+    }
 }
 
 /// # Errors
@@ -111,13 +118,8 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let warnings: Vec<String> = plans
         .iter()
-        .filter_map(|p| match tree.lookup_child(&parent, &p.name) {
-            ChildLookup::Missing => None,
-            _ => Some(format!(
-                "parent already contains an entry named '{}'",
-                p.name
-            )),
-        })
+        .filter(|p| !matches!(tree.lookup_child(&parent, &p.name), ChildLookup::Missing))
+        .map(|p| format!("parent already contains an entry named '{}'", p.name))
         .collect();
 
     let total_bytes: u64 = plans.iter().map(|p| p.size_bytes).sum();
@@ -126,7 +128,7 @@ pub async fn run_with_conn<C: TabletConnection>(
         return Ok(UploadOutput {
             parent_uuid,
             parent_path,
-            uploaded: plans.into_iter().map(plan_to_uploaded).collect(),
+            uploaded: plans.into_iter().map(UploadedDocument::from).collect(),
             total_bytes,
             dry_run: true,
             warnings,
@@ -135,7 +137,7 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     tablet::stop_xochitl(conn).await?;
 
-    let upload_result = perform_uploads(conn, data_dir, &plans, &parent).await;
+    let upload_result = perform_uploads(conn, data_dir, plans, &parent).await;
 
     // Always try to bring xochitl back so the tablet doesn't sit with the
     // service down. Upload errors take precedence over restart errors —
@@ -162,7 +164,7 @@ pub async fn run_with_conn<C: TabletConnection>(
 async fn perform_uploads<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
-    plans: &[Plan],
+    plans: Vec<Plan>,
     parent: &Parent,
 ) -> anyhow::Result<Vec<UploadedDocument>> {
     let now = Utc::now();
@@ -180,10 +182,9 @@ async fn perform_uploads<C: TabletConnection>(
             tags: vec![],
             last_opened: None,
         };
-        let metadata_bytes = serde_json::to_vec(&metadata)?;
         conn.write_file(
             &format!("{data_dir}/{}.metadata", plan.uuid),
-            &metadata_bytes,
+            &serde_json::to_vec(&metadata)?,
         )
         .await?;
 
@@ -192,45 +193,22 @@ async fn perform_uploads<C: TabletConnection>(
             page_count: None,
             pages: None,
         };
-        let content_bytes = serde_json::to_vec(&content)?;
         conn.write_file(
             &format!("{data_dir}/{}.content", plan.uuid),
-            &content_bytes,
+            &serde_json::to_vec(&content)?,
         )
         .await?;
 
-        let ext = source_extension(plan.file_type);
-        let written = transfer::upload_file(
+        transfer::upload_file(
             conn,
             &plan.source_path,
-            &format!("{data_dir}/{}.{ext}", plan.uuid),
+            &format!("{data_dir}/{}.{}", plan.uuid, plan.file_type.extension()),
         )
         .await?;
-        debug_assert_eq!(written, plan.size_bytes);
 
-        out.push(plan_to_uploaded_ref(plan));
+        out.push(plan.into());
     }
     Ok(out)
-}
-
-fn plan_to_uploaded(p: Plan) -> UploadedDocument {
-    UploadedDocument {
-        uuid: p.uuid,
-        name: p.name,
-        file_type: p.file_type,
-        source_path: p.source_path,
-        size_bytes: p.size_bytes,
-    }
-}
-
-fn plan_to_uploaded_ref(p: &Plan) -> UploadedDocument {
-    UploadedDocument {
-        uuid: p.uuid,
-        name: p.name.clone(),
-        file_type: p.file_type,
-        source_path: p.source_path.clone(),
-        size_bytes: p.size_bytes,
-    }
 }
 
 async fn build_plan(file_str: &str, name_override: Option<&str>) -> anyhow::Result<Plan> {
@@ -312,14 +290,6 @@ fn resolve_parent(
                 .unwrap_or_else(|| format!("/{}", e.visible_name));
             Ok((Parent::Folder(e.uuid), Some(e.uuid), path))
         }
-    }
-}
-
-fn source_extension(file_type: FileType) -> &'static str {
-    match file_type {
-        FileType::Pdf => "pdf",
-        FileType::Epub => "epub",
-        FileType::Notebook => "rm",
     }
 }
 

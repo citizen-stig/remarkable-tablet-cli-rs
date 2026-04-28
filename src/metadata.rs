@@ -32,6 +32,19 @@ pub enum FileType {
     Notebook,
 }
 
+impl FileType {
+    /// On-disk filename extension xochitl uses for this file type's source
+    /// file (`<uuid>.<ext>`). Notebooks store strokes per-page as `<uuid>/<page>.rm`.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            FileType::Pdf => "pdf",
+            FileType::Epub => "epub",
+            FileType::Notebook => "rm",
+        }
+    }
+}
+
 /// User-facing entry kind. Carries document-only data (`file_type`,
 /// `page_count`) inside the `Document` variant so the type system enforces
 /// that those fields exist iff the entry is a document.

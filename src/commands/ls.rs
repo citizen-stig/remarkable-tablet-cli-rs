@@ -5,7 +5,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::cli::LsArgs;
-use crate::commands::common::{self, CommandContext, EntryView, ItemKind};
+use crate::commands::common::{self, CommandContext, EntryView, ItemKind, is_false};
 use crate::error::CliError;
 use crate::metadata::{DocumentEntry, FileType, Parent};
 use crate::output::{self, OutputFormat};
@@ -37,12 +37,6 @@ pub struct TreeNode {
     #[serde(skip_serializing_if = "is_false")]
     pub pinned: bool,
     pub children: Vec<TreeNode>,
-}
-
-// serde's `skip_serializing_if` predicate requires `&T` by value contract.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_false(b: &bool) -> bool {
-    !*b
 }
 
 #[derive(Debug)]

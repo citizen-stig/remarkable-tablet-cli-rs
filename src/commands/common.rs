@@ -19,7 +19,7 @@ use crate::tree::DocumentTree;
 
 // serde's `skip_serializing_if` predicate requires `&T` by value contract.
 #[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_false(b: &bool) -> bool {
+pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
 
@@ -125,8 +125,6 @@ impl CommandContext {
         &self.config.data_dir
     }
 
-    /// Whether the user passed `--no-restart`, suppressing the
-    /// xochitl restart that mutating commands normally perform.
     #[must_use]
     pub fn no_restart(&self) -> bool {
         self.global.no_restart

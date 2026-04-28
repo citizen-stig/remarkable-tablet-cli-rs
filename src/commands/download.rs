@@ -125,7 +125,7 @@ async fn download_source_file<C: TabletConnection>(
     file_type: FileType,
     explicit_output: Option<&Path>,
 ) -> anyhow::Result<DownloadOutput> {
-    let ext = source_extension(file_type);
+    let ext = file_type.extension();
     let remote = format!("{data_dir}/{}.{ext}", entry.uuid);
     let output_path = match explicit_output {
         Some(p) => p.to_path_buf(),
@@ -276,14 +276,6 @@ fn refuse_existing(path: &Path) -> anyhow::Result<()> {
         .into());
     }
     Ok(())
-}
-
-fn source_extension(file_type: FileType) -> &'static str {
-    match file_type {
-        FileType::Pdf => "pdf",
-        FileType::Epub => "epub",
-        FileType::Notebook => "rm", // unused — handled separately
-    }
 }
 
 /// Replace path-unsafe characters in a `visibleName` so it can be used
