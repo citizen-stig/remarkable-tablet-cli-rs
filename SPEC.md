@@ -283,11 +283,13 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 9. +**Deletion commands** — `rm` (soft + permanent). Deliverable: complete file lifecycle.
 
 ### Phase 4: Rendering *(deferred — not in MVP)*
-Preparation:
- - split into workspace with crates:   
-    - browser (think of better name): connection, metadata, file manipulation, download/upload
-    - rm-parser: New crate that we will be working on
-    - cli: Only CLI params and handling of things
++Preparation:
+ - +split into workspace with crates:
+    - +`remarkable-metadata`: pure-data parsing of `.metadata`/`.content`, document tree, path resolver (publishable)
+    - +`remarkable-tablet`: SSH/SFTP client, file ops, xochitl control; depends on `remarkable-metadata`
+    - +`remarkable-rm-parser`: stub for the `.rm` binary format work below (publishable)
+    - +`remarkable-cli`: clap surface and commands; depends on the three above
+    - +`FakeConnection` lives behind a `test-utils` feature on `remarkable-tablet`, so `tempfile`/`filetime` are no longer runtime deps of the CLI
 10. **.rm binary parser** — Parse v3-v6 format into stroke data. Unit tests with sample files.
    - find enough sample files
    - good documentation

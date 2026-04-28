@@ -1978,7 +1978,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
-name = "remarkable-tablet-cli-rs"
+name = "remarkable-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1990,6 +1990,48 @@ dependencies = [
  "glob",
  "insta",
  "predicates",
+ "remarkable-metadata",
+ "remarkable-rm-parser",
+ "remarkable-tablet",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "uuid",
+]
+
+[[package]]
+name = "remarkable-metadata"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "remarkable-rm-parser"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "remarkable-tablet"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "filetime",
+ "futures",
+ "remarkable-metadata",
+ "remarkable-tablet",
  "russh",
  "russh-sftp",
  "serde",
@@ -1997,7 +2039,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "toml",
  "uuid",
 ]
 

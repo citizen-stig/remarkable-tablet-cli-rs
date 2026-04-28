@@ -1,0 +1,36 @@
+---
+source: crates/remarkable-cli/tests/cli.rs
+expression: stdout
+---
+Command-line tool for browsing, backing up, and managing files on a reMarkable tablet.
+
+Usage: remarkable-cli [OPTIONS] <COMMAND>
+
+Commands:
+  connect   Test connectivity and print device info
+  ls        List folder contents
+  info      Show full metadata for a document or folder
+  find      Search documents by name pattern
+  backup    Backup tablet data to local directory
+  download  Download a document from the tablet
+  upload    Upload PDF or ePub files to tablet
+  mv        Move document/folder to a different parent
+  mkdir     Create folder(s) on the tablet
+  rename    Rename a document or folder
+  rm        Delete documents/folders (soft delete by default)
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --host <host>          Tablet IP/hostname [auto-discover if omitted]
+      --port <port>          SSH port [default: 22]
+      --user <user>          SSH username [default: root]
+      --password <password>  SSH password (or set `REMARKABLE_PASSWORD` env var) [env: REMARKABLE_PASSWORD=]
+      --key_file <key_file>  SSH private key path [default: ~/.ssh/id_rsa]
+      --format <format>      Output format [default: human] [possible values: human, json]
+      --timeout <timeout>    SSH connection timeout in seconds [default: 5]
+      --data_dir <data_dir>  Remote xochitl data directory path [default: /home/root/.local/share/remarkable/xochitl]
+      --no-restart           Skip xochitl restart after mutating operations
+      --verbose              Enable verbose/debug logging to stderr
+      --quiet                Suppress all stderr output
+  -h, --help                 Print help
+  -V, --version              Print version

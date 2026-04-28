@@ -1,0 +1,38 @@
+[package]
+name = "remarkable-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line tool for browsing, backing up, and managing files on a reMarkable tablet."
+
+[[bin]]
+name = "remarkable-cli"
+path = "src/main.rs"
+
+[dependencies]
+remarkable-metadata = { workspace = true, features = ["clap"] }
+remarkable-rm-parser.workspace = true
+remarkable-tablet.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+futures.workspace = true
+glob.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+remarkable-tablet = { workspace = true, features = ["test-utils"] }
+assert_cmd = "2"
+filetime.workspace = true
+insta = "1"
+predicates = "3"
+tempfile.workspace = true
+
+[lints]
+workspace = true

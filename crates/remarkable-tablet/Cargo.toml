@@ -1,0 +1,32 @@
+[package]
+name = "remarkable-tablet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SSH/SFTP client and high-level filesystem operations for the reMarkable tablet."
+
+[features]
+test-utils = ["dep:tempfile", "dep:filetime"]
+
+[dependencies]
+remarkable-metadata.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+futures.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+filetime = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+remarkable-tablet = { path = ".", features = ["test-utils"] }
+
+[lints]
+workspace = true
