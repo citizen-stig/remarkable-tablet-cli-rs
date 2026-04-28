@@ -266,6 +266,18 @@ impl TabletConnection for SshConnection {
             .with_context(|| format!("sftp remove_file {path}"))
     }
 
+    async fn remove_dir_all(&self, path: &str) -> anyhow::Result<()> {
+        // SFTP exposes only non-recursive `remove_dir`. Falling back to a
+        // single shell `rm -rf` keeps this O(1) round-trips and matches
+        // `rm -rf`'s "no-op on missing" contract. `--` guards against any
+        // path starting with `-` (UUIDs never do, but be safe).
+        let escaped = crate::tablet::shell_single_quote(path);
+        self.execute(&format!("rm -rf -- {escaped}"))
+            .await
+            .with_context(|| format!("rm -rf {path}"))?;
+        Ok(())
+    }
+
     async fn execute(&self, command: &str) -> anyhow::Result<String> {
         let handle = self.handle.lock().await;
         let mut channel = handle

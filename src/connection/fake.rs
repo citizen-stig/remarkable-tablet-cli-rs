@@ -13,6 +13,7 @@ pub struct FakeConnection {
     read_errors: std::sync::Mutex<HashMap<String, String>>,
     read_dir_errors: std::sync::Mutex<HashMap<String, String>>,
     write_error_suffixes: std::sync::Mutex<Vec<(String, String)>>,
+    remove_errors: std::sync::Mutex<HashMap<String, String>>,
     /// Every command that flowed through `execute()`, in call order.
     /// Tests of mutating commands use this to verify xochitl stop/start
     /// is bracketed correctly around writes.
@@ -30,6 +31,7 @@ impl FakeConnection {
             read_errors: std::sync::Mutex::new(HashMap::new()),
             read_dir_errors: std::sync::Mutex::new(HashMap::new()),
             write_error_suffixes: std::sync::Mutex::new(Vec::new()),
+            remove_errors: std::sync::Mutex::new(HashMap::new()),
             executed_commands: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -106,6 +108,20 @@ impl FakeConnection {
             .lock()
             .unwrap()
             .push((suffix.to_string(), message.to_string()));
+    }
+
+    /// Inject a failure for `remove_file(path)`. Used by `rm --permanent`
+    /// tests to verify that auxiliary files are removed before metadata so
+    /// a partial failure leaves the item visible-but-broken instead of
+    /// orphaning its source files.
+    ///
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
+    pub fn set_remove_error(&self, path: &str, message: &str) {
+        self.remove_errors
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), message.to_string());
     }
 
     /// Snapshot of every command passed to `execute()` in call order.
@@ -187,8 +203,22 @@ impl TabletConnection for FakeConnection {
     }
 
     async fn remove_file(&self, path: &str) -> anyhow::Result<()> {
+        if let Some(message) = self.remove_errors.lock().unwrap().get(path).cloned() {
+            return Err(anyhow!(
+                "fake injected remove_file error for {path}: {message}"
+            ));
+        }
         let p = self.local(path);
         std::fs::remove_file(&p).with_context(|| format!("fake remove_file {}", p.display()))
+    }
+
+    async fn remove_dir_all(&self, path: &str) -> anyhow::Result<()> {
+        let p = self.local(path);
+        if !p.exists() {
+            return Ok(());
+        }
+        std::fs::remove_dir_all(&p)
+            .with_context(|| format!("fake remove_dir_all {}", p.display()))
     }
 
     async fn execute(&self, command: &str) -> anyhow::Result<String> {

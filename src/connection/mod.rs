@@ -52,6 +52,11 @@ pub trait TabletConnection {
     async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<RemoteEntry>>;
     async fn stat(&self, path: &str) -> anyhow::Result<RemoteMetadata>;
     async fn remove_file(&self, path: &str) -> anyhow::Result<()>;
+    /// Recursively remove a directory and everything under it. No-op if the
+    /// path doesn't exist (matches `rm -rf`'s contract). Used by `rm
+    /// --permanent` to wipe per-notebook page directories and thumbnail
+    /// directories that accumulate under a UUID.
+    async fn remove_dir_all(&self, path: &str) -> anyhow::Result<()>;
     async fn execute(&self, command: &str) -> anyhow::Result<String>;
     async fn file_exists(&self, path: &str) -> anyhow::Result<bool>;
 }

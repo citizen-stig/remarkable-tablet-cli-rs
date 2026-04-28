@@ -225,7 +225,7 @@ async fn fetch_disk<C: TabletConnection>(
     Ok((total_k / 1024, used_k / 1024, free_k / 1024))
 }
 
-fn shell_single_quote(s: &str) -> String {
+pub(crate) fn shell_single_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for c in s.chars() {
