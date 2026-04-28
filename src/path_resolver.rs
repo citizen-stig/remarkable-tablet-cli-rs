@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::anyhow;
 use uuid::Uuid;
 
@@ -11,6 +13,9 @@ pub enum Resolved<'a> {
     Root,
     Entry(&'a DocumentEntry),
 }
+
+const RESERVED_TRASH_PATH_MSG: &str =
+    "cannot create a real path at or under /trash; trash is a virtual container";
 
 /// Resolve a human-readable path like `"/Work/Meeting Notes"` to a tree entry.
 ///
@@ -121,9 +126,7 @@ fn lookup_leaf<'a>(tree: &'a DocumentTree, parent: &Parent, segment: &str) -> Ch
 fn strip_known_extension(name: &str) -> Option<(&str, &'static str)> {
     for ft in [FileType::Pdf, FileType::Epub, FileType::Notebook] {
         let ext = ft.extension();
-        if let Some(stem) = name
-            .strip_suffix(ext)
-            .and_then(|s| s.strip_suffix('.'))
+        if let Some(stem) = name.strip_suffix(ext).and_then(|s| s.strip_suffix('.'))
             && !stem.is_empty()
         {
             return Some((stem, ext));
@@ -135,12 +138,7 @@ fn strip_known_extension(name: &str) -> Option<(&str, &'static str)> {
 /// Up to `n` sibling names that look close to `name`, formatted with their
 /// extension (`Foo.pdf`) or trailing slash (`Bar/`) so the user can copy them
 /// directly into a path. Substring matches sort before edit-distance matches.
-fn suggest_siblings(
-    tree: &DocumentTree,
-    parent: &Parent,
-    name: &str,
-    n: usize,
-) -> Vec<String> {
+fn suggest_siblings(tree: &DocumentTree, parent: &Parent, name: &str, n: usize) -> Vec<String> {
     let needle_lower = name.to_lowercase();
     let needle_stem = strip_known_extension(&needle_lower)
         .map(|(stem, _)| stem.to_string())
@@ -193,13 +191,58 @@ fn levenshtein(a: &str, b: &str) -> usize {
         curr[0] = i;
         for j in 1..=b.len() {
             let cost = usize::from(a[i - 1] != b[j - 1]);
-            curr[j] = (curr[j - 1] + 1)
-                .min(prev[j] + 1)
-                .min(prev[j - 1] + cost);
+            curr[j] = (curr[j - 1] + 1).min(prev[j] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
     prev[b.len()]
+}
+
+/// Reject writes that would materialize a real path at or under `/trash`.
+/// That namespace is reserved for the virtual trash container used by path
+/// resolution and tree output.
+///
+/// # Errors
+/// Returns [`CliError::InvalidPath`] if `parent` + `name` would collide with
+/// the reserved `/trash` namespace.
+pub(crate) fn ensure_not_reserved_trash_path(
+    tree: &DocumentTree,
+    parent: &Parent,
+    name: &str,
+) -> anyhow::Result<()> {
+    if would_create_reserved_trash_path(tree, parent, name) {
+        return Err(CliError::InvalidPath(RESERVED_TRASH_PATH_MSG.to_string()).into());
+    }
+    Ok(())
+}
+
+fn would_create_reserved_trash_path(tree: &DocumentTree, parent: &Parent, name: &str) -> bool {
+    if matches!(parent, Parent::Root) {
+        return name == "trash";
+    }
+    if matches!(parent, Parent::Trash) {
+        return false;
+    }
+
+    let mut current_parent = parent;
+    let mut seen = HashSet::new();
+    loop {
+        match current_parent {
+            Parent::Root | Parent::Trash => return false,
+            Parent::Folder(uuid) => {
+                if !seen.insert(*uuid) {
+                    return false;
+                }
+                let Some(entry) = tree.get(uuid) else {
+                    return false;
+                };
+                if entry.parent == Parent::Root {
+                    return entry.visible_name == "trash";
+                }
+                current_parent = &entry.parent;
+            }
+        }
+    }
 }
 
 /// Resolve a UUID to its full human-readable path (e.g., `"/Work/Meeting Notes"`).
@@ -513,6 +556,82 @@ mod tests {
     }
 
     #[test]
+    fn reserved_trash_path_rejects_root_name_trash() {
+        let tree = sample_tree();
+        assert!(would_create_reserved_trash_path(
+            &tree,
+            &Parent::Root,
+            "trash"
+        ));
+        assert!(ensure_not_reserved_trash_path(&tree, &Parent::Root, "trash").is_err());
+    }
+
+    #[test]
+    fn reserved_trash_path_rejects_real_root_trash_subtree() {
+        let trash_root = Uuid::parse_str(FOLDER_A).unwrap();
+        let nested = Uuid::parse_str(FOLDER_B).unwrap();
+        let tree = DocumentTree::build(vec![
+            make_entry(FOLDER_A, "trash", ItemType::Collection, Parent::Root, None),
+            make_entry(
+                FOLDER_B,
+                "Nested",
+                ItemType::Collection,
+                Parent::Folder(trash_root),
+                None,
+            ),
+        ]);
+
+        assert!(would_create_reserved_trash_path(
+            &tree,
+            &Parent::Folder(trash_root),
+            "Doc"
+        ));
+        assert!(would_create_reserved_trash_path(
+            &tree,
+            &Parent::Folder(nested),
+            "Doc"
+        ));
+    }
+
+    #[test]
+    fn reserved_trash_path_allows_virtual_trash_parent() {
+        let tree = sample_tree();
+        assert!(!would_create_reserved_trash_path(
+            &tree,
+            &Parent::Trash,
+            "Recovered"
+        ));
+        assert!(ensure_not_reserved_trash_path(&tree, &Parent::Trash, "Recovered").is_ok());
+    }
+
+    #[test]
+    fn reserved_trash_path_allows_descendants_of_trashed_folder() {
+        let trashed_folder = Uuid::parse_str(FOLDER_A).unwrap();
+        let tree = DocumentTree::build(vec![
+            make_entry(
+                FOLDER_A,
+                "Old Folder",
+                ItemType::Collection,
+                Parent::Trash,
+                None,
+            ),
+            make_entry(
+                DOC_1,
+                "Recovered",
+                ItemType::Document,
+                Parent::Folder(trashed_folder),
+                Some(FileType::Pdf),
+            ),
+        ]);
+
+        assert!(!would_create_reserved_trash_path(
+            &tree,
+            &Parent::Folder(trashed_folder),
+            "Recovered"
+        ));
+    }
+
+    #[test]
     fn uuid_to_path_not_found() {
         let tree = sample_tree();
         let uuid = Uuid::new_v4();
@@ -713,6 +832,9 @@ mod tests {
         let tree = sample_tree();
         let err = resolve_path(&tree, "/Wrk").unwrap_err();
         let msg = err.downcast_ref::<CliError>().unwrap().to_string();
-        assert!(msg.contains("Work/"), "expected folder suggestion, got: {msg}");
+        assert!(
+            msg.contains("Work/"),
+            "expected folder suggestion, got: {msg}"
+        );
     }
 }

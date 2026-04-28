@@ -112,7 +112,9 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let mut plans = Vec::with_capacity(args.files.len());
     for file_str in &args.files {
-        plans.push(build_plan(file_str, args.name.as_deref()).await?);
+        let plan = build_plan(file_str, args.name.as_deref()).await?;
+        path_resolver::ensure_not_reserved_trash_path(tree, &parent, &plan.name)?;
+        plans.push(plan);
     }
 
     let warnings: Vec<String> = plans
@@ -368,6 +370,32 @@ fn format_human(o: &UploadOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::FakeConnection;
+    use crate::metadata::{DocumentEntry, FileType, ItemKind, Parent};
+    use chrono::{TimeZone, Utc};
+    use std::io::Write;
+
+    fn make_folder(uuid: &str, name: &str, parent: Parent) -> DocumentEntry {
+        let deleted = parent == Parent::Trash;
+        DocumentEntry {
+            uuid: Uuid::parse_str(uuid).unwrap(),
+            visible_name: name.to_string(),
+            kind: ItemKind::Folder,
+            parent,
+            deleted,
+            pinned: false,
+            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
+            version: 1,
+            tags: vec![],
+            last_opened: None,
+        }
+    }
+
+    fn temp_pdf() -> tempfile::NamedTempFile {
+        let mut file = tempfile::Builder::new().suffix(".pdf").tempfile().unwrap();
+        file.write_all(b"%PDF-1.4\n").unwrap();
+        file
+    }
 
     #[test]
     fn classify_pdf_lowercase() {
@@ -405,5 +433,49 @@ mod tests {
         let err = classify_file_type(Path::new("foo")).unwrap_err();
         let cli = err.downcast_ref::<CliError>().unwrap();
         assert!(matches!(cli, CliError::FormatError(_)));
+    }
+
+    #[tokio::test]
+    async fn reject_upload_named_trash_to_root() {
+        let file = temp_pdf();
+        let tree = DocumentTree::build(vec![]);
+        let conn = FakeConnection::new();
+        let args = UploadArgs {
+            files: vec![file.path().display().to_string()],
+            parent: None,
+            name: Some("trash".to_string()),
+            dry_run: true,
+        };
+
+        let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)
+            .await
+            .unwrap_err();
+        let cli = err.downcast_ref::<CliError>().unwrap();
+        assert!(matches!(cli, CliError::InvalidPath(msg) if msg.contains("/trash")));
+        assert!(conn.executed_commands().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reject_upload_into_real_root_trash_folder_by_uuid() {
+        let file = temp_pdf();
+        let tree = DocumentTree::build(vec![make_folder(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            "trash",
+            Parent::Root,
+        )]);
+        let conn = FakeConnection::new();
+        let args = UploadArgs {
+            files: vec![file.path().display().to_string()],
+            parent: Some("aaaaaaaa-0000-0000-0000-000000000001".to_string()),
+            name: Some("Notes".to_string()),
+            dry_run: true,
+        };
+
+        let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)
+            .await
+            .unwrap_err();
+        let cli = err.downcast_ref::<CliError>().unwrap();
+        assert!(matches!(cli, CliError::InvalidPath(msg) if msg.contains("/trash")));
+        assert!(conn.executed_commands().is_empty());
     }
 }

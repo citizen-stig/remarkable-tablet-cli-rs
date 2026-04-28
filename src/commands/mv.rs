@@ -87,6 +87,8 @@ pub async fn run_with_conn<C: TabletConnection>(
         });
     }
 
+    path_resolver::ensure_not_reserved_trash_path(tree, &new_parent, &source.visible_name)?;
+
     let warnings = match tree.lookup_child(&new_parent, &source.visible_name) {
         ChildLookup::Missing => vec![],
         ChildLookup::Entry(_) | ChildLookup::Ambiguous => vec![format!(
@@ -221,6 +223,44 @@ fn format_human(o: &MvOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::FakeConnection;
+    use crate::metadata::{FileType, ItemKind};
+    use chrono::{TimeZone, Utc};
+
+    fn make_folder(uuid: &str, name: &str, parent: Parent) -> DocumentEntry {
+        let deleted = parent == Parent::Trash;
+        DocumentEntry {
+            uuid: Uuid::parse_str(uuid).unwrap(),
+            visible_name: name.to_string(),
+            kind: ItemKind::Folder,
+            parent,
+            deleted,
+            pinned: false,
+            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
+            version: 1,
+            tags: vec![],
+            last_opened: None,
+        }
+    }
+
+    fn make_doc(uuid: &str, name: &str, parent: Parent, file_type: FileType) -> DocumentEntry {
+        let deleted = parent == Parent::Trash;
+        DocumentEntry {
+            uuid: Uuid::parse_str(uuid).unwrap(),
+            visible_name: name.to_string(),
+            kind: ItemKind::Document {
+                file_type,
+                page_count: None,
+            },
+            parent,
+            deleted,
+            pinned: false,
+            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
+            version: 1,
+            tags: vec![],
+            last_opened: None,
+        }
+    }
 
     #[test]
     fn parent_to_metadata_str_matches_serializer() {
@@ -231,5 +271,64 @@ mod tests {
             parent_to_metadata_str(&Parent::Folder(uuid)),
             "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         );
+    }
+
+    #[tokio::test]
+    async fn reject_moving_item_named_trash_to_root() {
+        let folder = Uuid::parse_str("aaaaaaaa-0000-0000-0000-000000000001").unwrap();
+        let tree = DocumentTree::build(vec![
+            make_folder(
+                "aaaaaaaa-0000-0000-0000-000000000001",
+                "Inbox",
+                Parent::Root,
+            ),
+            make_doc(
+                "bbbbbbbb-0000-0000-0000-000000000001",
+                "trash",
+                Parent::Folder(folder),
+                FileType::Pdf,
+            ),
+        ]);
+        let conn = FakeConnection::new();
+        let args = MvArgs {
+            source: "/Inbox/trash".to_string(),
+            dest_folder: "/".to_string(),
+        };
+
+        let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)
+            .await
+            .unwrap_err();
+        let cli = err.downcast_ref::<CliError>().unwrap();
+        assert!(matches!(cli, CliError::InvalidPath(msg) if msg.contains("/trash")));
+        assert!(conn.executed_commands().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reject_moving_into_real_root_trash_folder_by_uuid() {
+        let tree = DocumentTree::build(vec![
+            make_folder(
+                "aaaaaaaa-0000-0000-0000-000000000001",
+                "trash",
+                Parent::Root,
+            ),
+            make_doc(
+                "bbbbbbbb-0000-0000-0000-000000000001",
+                "Notes",
+                Parent::Root,
+                FileType::Pdf,
+            ),
+        ]);
+        let conn = FakeConnection::new();
+        let args = MvArgs {
+            source: "/Notes".to_string(),
+            dest_folder: "aaaaaaaa-0000-0000-0000-000000000001".to_string(),
+        };
+
+        let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)
+            .await
+            .unwrap_err();
+        let cli = err.downcast_ref::<CliError>().unwrap();
+        assert!(matches!(cli, CliError::InvalidPath(msg) if msg.contains("/trash")));
+        assert!(conn.executed_commands().is_empty());
     }
 }

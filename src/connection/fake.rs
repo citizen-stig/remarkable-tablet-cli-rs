@@ -217,8 +217,7 @@ impl TabletConnection for FakeConnection {
         if !p.exists() {
             return Ok(());
         }
-        std::fs::remove_dir_all(&p)
-            .with_context(|| format!("fake remove_dir_all {}", p.display()))
+        std::fs::remove_dir_all(&p).with_context(|| format!("fake remove_dir_all {}", p.display()))
     }
 
     async fn execute(&self, command: &str) -> anyhow::Result<String> {

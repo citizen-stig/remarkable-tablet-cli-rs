@@ -322,7 +322,11 @@ fn format_human(o: &RmOutput) -> String {
     if o.no_op {
         return "no change: all targets were already in trash".to_string();
     }
-    let mode = if o.permanent { "permanently deleted" } else { "trashed" };
+    let mode = if o.permanent {
+        "permanently deleted"
+    } else {
+        "trashed"
+    };
     let mut lines = Vec::with_capacity(o.deleted.len() + 2);
     lines.push(format!("{} {} item(s)", mode, o.deleted.len()));
     for d in &o.deleted {

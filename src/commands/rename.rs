@@ -81,6 +81,8 @@ pub async fn run_with_conn<C: TabletConnection>(
         });
     }
 
+    path_resolver::ensure_not_reserved_trash_path(tree, &entry.parent, &args.new_name)?;
+
     let warnings = match tree.lookup_child(&entry.parent, &args.new_name) {
         ChildLookup::Missing => vec![],
         ChildLookup::Entry(_) | ChildLookup::Ambiguous => vec![format!(
@@ -192,4 +194,53 @@ fn format_human(o: &RenameOutput) -> String {
         lines.push(format!("warning: {w}"));
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::FakeConnection;
+    use crate::metadata::{DocumentEntry, FileType, ItemKind, Parent};
+    use chrono::{TimeZone, Utc};
+
+    fn make_doc(uuid: &str, name: &str, parent: Parent, file_type: FileType) -> DocumentEntry {
+        let deleted = parent == Parent::Trash;
+        DocumentEntry {
+            uuid: Uuid::parse_str(uuid).unwrap(),
+            visible_name: name.to_string(),
+            kind: ItemKind::Document {
+                file_type,
+                page_count: None,
+            },
+            parent,
+            deleted,
+            pinned: false,
+            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
+            version: 1,
+            tags: vec![],
+            last_opened: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn reject_renaming_root_item_to_trash() {
+        let tree = DocumentTree::build(vec![make_doc(
+            "11111111-1111-1111-1111-111111111111",
+            "Notes",
+            Parent::Root,
+            FileType::Pdf,
+        )]);
+        let conn = FakeConnection::new();
+        let args = RenameArgs {
+            path_or_uuid: "/Notes".to_string(),
+            new_name: "trash".to_string(),
+        };
+
+        let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)
+            .await
+            .unwrap_err();
+        let cli = err.downcast_ref::<CliError>().unwrap();
+        assert!(matches!(cli, CliError::InvalidPath(msg) if msg.contains("/trash")));
+        assert!(conn.executed_commands().is_empty());
+    }
 }
