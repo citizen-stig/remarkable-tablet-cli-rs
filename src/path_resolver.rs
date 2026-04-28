@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use uuid::Uuid;
 
 use crate::error::CliError;
@@ -79,11 +80,15 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
 /// Resolve a UUID to its full human-readable path (e.g., `"/Work/Meeting Notes"`).
 ///
 /// # Errors
-/// Returns an error if `uuid` is not in the tree.
+/// Returns an error if `uuid` is not in the tree or its parent chain is cyclic.
 pub fn resolve_uuid_to_path(tree: &DocumentTree, uuid: &Uuid) -> anyhow::Result<String> {
+    if tree.get(uuid).is_none() {
+        return Err(CliError::NotFound(format!("UUID {uuid} not found")).into());
+    }
+
     tree.display_path(uuid)
         .map(str::to_string)
-        .ok_or_else(|| CliError::NotFound(format!("UUID {uuid} not found")).into())
+        .ok_or_else(|| anyhow!("cyclic parent chain while resolving UUID {uuid}"))
 }
 
 /// Accept either a UUID or a human path and resolve it.
@@ -387,5 +392,37 @@ mod tests {
         let tree = sample_tree();
         let uuid = Uuid::new_v4();
         assert!(resolve_uuid_to_path(&tree, &uuid).is_err());
+    }
+
+    #[test]
+    fn uuid_to_path_cycle_is_err() {
+        let folder_a = Uuid::parse_str(FOLDER_A).unwrap();
+        let folder_b = Uuid::parse_str(FOLDER_B).unwrap();
+        let doc_uuid = Uuid::parse_str(DOC_1).unwrap();
+        let tree = DocumentTree::build(vec![
+            make_entry(
+                FOLDER_A,
+                "Folder A",
+                ItemType::Collection,
+                Parent::Folder(folder_b),
+                None,
+            ),
+            make_entry(
+                FOLDER_B,
+                "Folder B",
+                ItemType::Collection,
+                Parent::Folder(folder_a),
+                None,
+            ),
+            make_entry(
+                DOC_1,
+                "Looped Doc",
+                ItemType::Document,
+                Parent::Folder(folder_b),
+                Some(FileType::Pdf),
+            ),
+        ]);
+
+        assert!(resolve_uuid_to_path(&tree, &doc_uuid).is_err());
     }
 }

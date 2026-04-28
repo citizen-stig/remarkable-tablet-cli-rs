@@ -552,6 +552,53 @@ async fn info_orphan_uuid_uses_fallback_path() {
 }
 
 #[tokio::test]
+async fn info_uuid_in_parent_cycle_uses_fallback_path() {
+    let conn = FakeConnection::new();
+    conn.mkdir(DATA_DIR);
+    let folder_a = "dddddddd-1111-1111-1111-111111111111";
+    let folder_b = "dddddddd-2222-2222-2222-222222222222";
+    let doc_uuid = "eeeeeeee-1111-1111-1111-111111111111";
+
+    conn.set_file(
+        &format!("{DATA_DIR}/{folder_a}.metadata"),
+        format!(
+            r#"{{"visibleName":"Folder A","type":"CollectionType","parent":"{folder_b}","deleted":false,"pinned":false,"lastModified":1710518400000,"metadatamodified":1710518400000,"version":1}}"#
+        ),
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{folder_b}.metadata"),
+        format!(
+            r#"{{"visibleName":"Folder B","type":"CollectionType","parent":"{folder_a}","deleted":false,"pinned":false,"lastModified":1710518400000,"metadatamodified":1710518400000,"version":1}}"#
+        ),
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{doc_uuid}.metadata"),
+        format!(
+            r#"{{"visibleName":"Looped Doc","type":"DocumentType","parent":"{folder_b}","deleted":false,"pinned":false,"lastModified":1710700000000,"metadatamodified":1710700000000,"version":1}}"#
+        ),
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{doc_uuid}.content"),
+        r#"{"fileType":"pdf"}"#,
+    );
+
+    let tree = build_tree(&conn).await;
+    let out = info::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &InfoArgs {
+            path_or_uuid: doc_uuid.into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out.entry.uuid, Uuid::parse_str(doc_uuid).unwrap());
+    assert_eq!(out.entry.path, "/Looped Doc");
+}
+
+#[tokio::test]
 async fn info_root_is_invalid_path() {
     let conn = setup_fake_tablet();
     let tree = build_tree(&conn).await;

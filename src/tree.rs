@@ -13,7 +13,7 @@ use crate::metadata::{DocumentEntry, Parent};
 pub struct DocumentTree {
     entries: HashMap<Uuid, DocumentEntry>,
     children: HashMap<Parent, Vec<Uuid>>,
-    paths: HashMap<Uuid, String>,
+    paths: HashMap<Uuid, Option<String>>,
 }
 
 pub enum ChildLookup<'a> {
@@ -172,7 +172,7 @@ impl DocumentTree {
 
     #[must_use]
     pub fn display_path(&self, uuid: &Uuid) -> Option<&str> {
-        self.paths.get(uuid).map(String::as_str)
+        self.paths.get(uuid).and_then(Option::as_deref)
     }
 
     /// List children of a folder with filters and sorting applied.
@@ -277,13 +277,12 @@ impl DocumentTree {
     }
 }
 
-fn build_display_paths(entries: &HashMap<Uuid, DocumentEntry>) -> HashMap<Uuid, String> {
+fn build_display_paths(entries: &HashMap<Uuid, DocumentEntry>) -> HashMap<Uuid, Option<String>> {
     let mut paths = HashMap::with_capacity(entries.len());
     let mut visiting = HashSet::new();
 
     for uuid in entries.keys().copied() {
-        let path = build_display_path(entries, uuid, &mut paths, &mut visiting);
-        paths.insert(uuid, path);
+        let _ = build_display_path(entries, uuid, &mut paths, &mut visiting);
     }
 
     paths
@@ -292,34 +291,36 @@ fn build_display_paths(entries: &HashMap<Uuid, DocumentEntry>) -> HashMap<Uuid, 
 fn build_display_path(
     entries: &HashMap<Uuid, DocumentEntry>,
     uuid: Uuid,
-    paths: &mut HashMap<Uuid, String>,
+    paths: &mut HashMap<Uuid, Option<String>>,
     visiting: &mut HashSet<Uuid>,
-) -> String {
+) -> Option<String> {
     if let Some(path) = paths.get(&uuid) {
         return path.clone();
     }
 
-    let Some(entry) = entries.get(&uuid) else {
-        return "/".to_string();
-    };
+    let entry = entries.get(&uuid)?;
 
     if !visiting.insert(uuid) {
-        return format!("/{}", entry.visible_name);
+        return None;
     }
 
     let path = match entry.parent {
-        Parent::Root => format!("/{}", entry.visible_name),
-        Parent::Trash => format!("/trash/{}", entry.visible_name),
+        Parent::Root => Some(format!("/{}", entry.visible_name)),
+        Parent::Trash => Some(format!("/trash/{}", entry.visible_name)),
         Parent::Folder(parent_uuid) => {
             if let Some(parent) = entries.get(&parent_uuid) {
                 let parent_path = build_display_path(entries, parent_uuid, paths, visiting);
-                if parent_path == "/" || parent.visible_name.is_empty() {
-                    format!("/{}", entry.visible_name)
+                if let Some(parent_path) = parent_path {
+                    if parent_path == "/" || parent.visible_name.is_empty() {
+                        Some(format!("/{}", entry.visible_name))
+                    } else {
+                        Some(format!("{parent_path}/{}", entry.visible_name))
+                    }
                 } else {
-                    format!("{parent_path}/{}", entry.visible_name)
+                    None
                 }
             } else {
-                format!("/{}", entry.visible_name)
+                Some(format!("/{}", entry.visible_name))
             }
         }
     };
@@ -712,6 +713,62 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("cycle detected"));
+    }
+
+    #[test]
+    fn display_path_returns_none_for_cyclic_parent_chain_but_keeps_other_fallbacks() {
+        let folder_a_uuid = Uuid::parse_str(FOLDER_A).unwrap();
+        let folder_b_uuid = Uuid::parse_str(FOLDER_B).unwrap();
+        let orphan_parent = Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap();
+        let tree = DocumentTree::build(vec![
+            make_entry(
+                FOLDER_A,
+                "Folder A",
+                ItemType::Collection,
+                Parent::Folder(folder_b_uuid),
+                None,
+            ),
+            make_entry(
+                FOLDER_B,
+                "Folder B",
+                ItemType::Collection,
+                Parent::Folder(folder_a_uuid),
+                None,
+            ),
+            make_entry(
+                DOC_1,
+                "Looped Doc",
+                ItemType::Document,
+                Parent::Folder(folder_b_uuid),
+                Some(FileType::Pdf),
+            ),
+            make_entry(
+                DOC_2,
+                "Orphan",
+                ItemType::Document,
+                Parent::Folder(orphan_parent),
+                Some(FileType::Pdf),
+            ),
+            make_entry(
+                DOC_3,
+                "Root Doc",
+                ItemType::Document,
+                Parent::Root,
+                Some(FileType::Notebook),
+            ),
+        ]);
+
+        assert_eq!(
+            tree.display_path(&Uuid::parse_str(DOC_3).unwrap()),
+            Some("/Root Doc")
+        );
+        assert_eq!(
+            tree.display_path(&Uuid::parse_str(DOC_2).unwrap()),
+            Some("/Orphan")
+        );
+        assert_eq!(tree.display_path(&Uuid::parse_str(FOLDER_A).unwrap()), None);
+        assert_eq!(tree.display_path(&Uuid::parse_str(FOLDER_B).unwrap()), None);
+        assert_eq!(tree.display_path(&Uuid::parse_str(DOC_1).unwrap()), None);
     }
 
     #[test]

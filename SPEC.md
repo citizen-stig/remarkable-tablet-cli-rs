@@ -274,8 +274,8 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 4. + **Browse commands** — `ls` (with `--tree`/`--recursive`), `info`, `find`. Deliverable: full read-only browsing with tests.
 
 ### ~Phase 2: Data Transfer
-5. ~**Backup** — SFTP recursive copy, incremental mode, manifest. Deliverable: `remarkable-cli backup ./backups`.
-6. ~**Download** — Single document fetch. Deliverable: `remarkable-cli download <uuid> --output ./doc.pdf`.
+5. +**Backup** — SFTP recursive copy, incremental mode, manifest. Deliverable: `remarkable-cli backup ./backups`.
+6. +**Download** — Single document fetch. Deliverable: `remarkable-cli download <uuid> --output ./doc.pdf`.
 7. **Upload** — UUID generation, metadata creation, file transfer, xochitl restart. Deliverable: `remarkable-cli upload paper.pdf --parent /Research`.
 
 ### Phase 3: File Organization
