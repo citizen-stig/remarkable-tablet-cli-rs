@@ -101,6 +101,61 @@ pub async fn start_xochitl<C: TabletConnection>(conn: &C) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Bracket `work` with xochitl stopped, then restarted (skipped under
+/// `no_restart`). The restart is attempted even when `work` fails so the
+/// tablet doesn't get left with the document service down; `work`'s error
+/// takes precedence over a restart failure because it's the user's primary
+/// signal.
+///
+/// # Errors
+/// Returns the first failure of: stop, `work`, or restart (in that order
+/// of priority).
+pub async fn with_xochitl_stopped<C, T, Fut>(
+    conn: &C,
+    no_restart: bool,
+    work: impl FnOnce() -> Fut,
+) -> anyhow::Result<T>
+where
+    C: TabletConnection,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    stop_xochitl(conn).await?;
+    let work_result = work().await;
+    let restart_result = if no_restart {
+        Ok(())
+    } else {
+        start_xochitl(conn).await
+    };
+    let value = work_result?;
+    restart_result?;
+    Ok(value)
+}
+
+/// Read `<uuid>.metadata`, mutate selected fields in place via `f`, and
+/// write the result back. Round-trips through `serde_json::Value` rather
+/// than [`crate::metadata::RawMetadata`] so unknown firmware-specific
+/// fields survive — the typed struct silently drops anything it doesn't
+/// model.
+///
+/// # Errors
+/// Returns an error if the file cannot be read, is not a JSON object, or
+/// the write fails.
+pub async fn update_metadata<C: TabletConnection>(
+    conn: &C,
+    path: &str,
+    f: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) -> anyhow::Result<()> {
+    let raw = conn.read_file(path).await?;
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&raw).with_context(|| format!("parse metadata json: {path}"))?;
+    let obj = json
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("metadata is not a JSON object: {path}"))?;
+    f(obj);
+    conn.write_file(path, &serde_json::to_vec(&json)?).await?;
+    Ok(())
+}
+
 async fn fetch_firmware<C: TabletConnection>(conn: &C) -> anyhow::Result<String> {
     let bytes = conn
         .read_file("/etc/version")
@@ -235,5 +290,105 @@ mod tests {
     fn shell_quote_basic() {
         assert_eq!(shell_single_quote("abc"), "'abc'");
         assert_eq!(shell_single_quote("a'b"), "'a'\\''b'");
+    }
+
+    fn register_xochitl(conn: &FakeConnection) {
+        conn.set_command_output("systemctl stop xochitl", "");
+        conn.set_command_output("systemctl start xochitl", "");
+    }
+
+    #[tokio::test]
+    async fn with_xochitl_stopped_brackets_work() {
+        let conn = FakeConnection::new();
+        register_xochitl(&conn);
+
+        let value = with_xochitl_stopped(&conn, false, || async { Ok::<_, anyhow::Error>(42) })
+            .await
+            .unwrap();
+        assert_eq!(value, 42);
+
+        let cmds = conn.executed_commands();
+        assert_eq!(
+            cmds,
+            vec![
+                "systemctl stop xochitl".to_string(),
+                "systemctl start xochitl".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn with_xochitl_stopped_skips_start_under_no_restart() {
+        let conn = FakeConnection::new();
+        register_xochitl(&conn);
+
+        with_xochitl_stopped(&conn, true, || async { Ok::<_, anyhow::Error>(()) })
+            .await
+            .unwrap();
+
+        let cmds = conn.executed_commands();
+        assert_eq!(cmds, vec!["systemctl stop xochitl".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn with_xochitl_stopped_restarts_even_when_work_fails() {
+        let conn = FakeConnection::new();
+        register_xochitl(&conn);
+
+        let err = with_xochitl_stopped(&conn, false, || async {
+            Err::<(), _>(anyhow!("work blew up"))
+        })
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("work blew up"));
+
+        let cmds = conn.executed_commands();
+        assert!(cmds.iter().any(|c| c == "systemctl start xochitl"));
+    }
+
+    #[tokio::test]
+    async fn with_xochitl_stopped_prefers_work_error_over_restart_error() {
+        let conn = FakeConnection::new();
+        conn.set_command_output("systemctl stop xochitl", "");
+        // `start` is intentionally not registered → the fake returns an error.
+
+        let err = with_xochitl_stopped(&conn, false, || async {
+            Err::<(), _>(anyhow!("primary failure"))
+        })
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("primary failure"));
+    }
+
+    #[tokio::test]
+    async fn update_metadata_preserves_unknown_fields() {
+        let conn = FakeConnection::new();
+        let path = "/data/abc.metadata";
+        conn.set_file(
+            path,
+            br#"{"visibleName":"Old","type":"DocumentType","parent":"","version":1,"futureField":{"k":"v"}}"#,
+        );
+
+        update_metadata(&conn, path, |obj| {
+            obj.insert("visibleName".into(), serde_json::json!("New"));
+        })
+        .await
+        .unwrap();
+
+        let raw = conn.read_file(path).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(v["visibleName"], "New");
+        assert_eq!(v["futureField"]["k"], "v");
+        assert_eq!(v["version"], 1);
+    }
+
+    #[tokio::test]
+    async fn update_metadata_rejects_non_object_json() {
+        let conn = FakeConnection::new();
+        let path = "/data/bad.metadata";
+        conn.set_file(path, br#"["not","an","object"]"#);
+
+        let err = update_metadata(&conn, path, |_| {}).await.unwrap_err();
+        assert!(err.to_string().contains("not a JSON object"));
     }
 }

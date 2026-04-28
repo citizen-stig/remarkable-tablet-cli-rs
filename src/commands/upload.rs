@@ -134,21 +134,10 @@ pub async fn run_with_conn<C: TabletConnection>(
         });
     }
 
-    tablet::stop_xochitl(conn).await?;
-
-    let upload_result = perform_uploads(conn, data_dir, plans, &parent).await;
-
-    // Always try to bring xochitl back so the tablet doesn't sit with the
-    // service down. Upload errors take precedence over restart errors —
-    // they're the user's primary failure to act on.
-    let restart_result = if no_restart {
-        Ok(())
-    } else {
-        tablet::start_xochitl(conn).await
-    };
-
-    let uploaded = upload_result?;
-    restart_result?;
+    let uploaded = tablet::with_xochitl_stopped(conn, no_restart, || {
+        perform_uploads(conn, data_dir, plans, &parent)
+    })
+    .await?;
 
     Ok(UploadOutput {
         parent_uuid,

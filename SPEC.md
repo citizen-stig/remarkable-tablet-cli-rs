@@ -273,14 +273,14 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 3. + **Metadata parsing + document tree** — metadata.rs serde structs, tablet.rs (read all metadata via trait), tree.rs, path_resolver.rs + unit tests using fixtures. Deliverable: internal library represents full document tree.
 4. + **Browse commands** — `ls` (with `--tree`/`--recursive`), `info`, `find`. Deliverable: full read-only browsing with tests.
 
-### ~Phase 2: Data Transfer
+### +Phase 2: Data Transfer
 5. +**Backup** — SFTP recursive copy, incremental mode, manifest. Deliverable: `remarkable-cli backup ./backups`.
 6. +**Download** — Single document fetch. Deliverable: `remarkable-cli download <uuid> --output ./doc.pdf`.
-7. ~**Upload** — UUID generation, metadata creation, file transfer, xochitl restart. Deliverable: `remarkable-cli upload paper.pdf --parent /Research`.
+7. +**Upload** — UUID generation, metadata creation, file transfer, xochitl restart. Deliverable: `remarkable-cli upload paper.pdf --parent /Research`.
 
-### Phase 3: File Organization
-8. **Mutation commands** — `mv`, `mkdir`, `rename` with xochitl stop/restart. Deliverable: reorganize tablet files.
-9. **Deletion commands** — `rm` (soft + permanent). Deliverable: complete file lifecycle.
+### +Phase 3: File Organization
+8. +**Mutation commands** — `mv`, `mkdir`, `rename` with xochitl stop/restart. Deliverable: reorganize tablet files.
+9. +**Deletion commands** — `rm` (soft + permanent). Deliverable: complete file lifecycle.
 
 ### Phase 4: Rendering *(deferred — not in MVP)*
 Preparation:
@@ -298,6 +298,18 @@ Preparation:
 12. **Deferred commands** — `recent`, `purge`, `restart`, hostname auto-discovery.
 13. **PDF/ePub background compositing** — Render source document pages under stroke layers (optional enhancement).
 14. **CI + release pipeline** — GitHub Actions, cross-compilation, README.
+15. Publishing:
+    - cli: installing via  cargo install and/or archlinux AUR
+    - binary parser on crates.io
+    - metadata reader on crates.io
+
+### Phase 6: Discovered During implementation
+
+ - tag manipulation: add/remove
+ - filter by tag
+ - count by tag:
+   - "read" command: download/render in the same step, so it so consumable by LLM agent
+   - download destination folder
 
 ---
 
