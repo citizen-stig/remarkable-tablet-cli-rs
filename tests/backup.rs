@@ -74,14 +74,9 @@ async fn full_backup_copies_every_file_and_writes_manifest() {
     populate_xochitl(&conn);
     let dest = tempfile::tempdir().unwrap();
 
-    let out = backup::run_with_conn(
-        &conn,
-        DATA_DIR,
-        dest.path(),
-        &args(dest.path(), false, false),
-    )
-    .await
-    .unwrap();
+    let out = backup::run_with_conn(&conn, DATA_DIR, &args(dest.path(), false, false))
+        .await
+        .unwrap();
 
     assert!(!out.dry_run);
     assert!(!out.incremental);
@@ -145,14 +140,9 @@ async fn dry_run_does_not_write_anything() {
     populate_xochitl(&conn);
     let dest = tempfile::tempdir().unwrap();
 
-    let out = backup::run_with_conn(
-        &conn,
-        DATA_DIR,
-        dest.path(),
-        &args(dest.path(), false, true),
-    )
-    .await
-    .unwrap();
+    let out = backup::run_with_conn(&conn, DATA_DIR, &args(dest.path(), false, true))
+        .await
+        .unwrap();
 
     assert!(out.dry_run);
     assert_eq!(out.copied, 8);
@@ -171,14 +161,9 @@ async fn empty_xochitl_succeeds() {
     conn.set_file("/etc/version", b"20240101");
     let dest = tempfile::tempdir().unwrap();
 
-    let out = backup::run_with_conn(
-        &conn,
-        DATA_DIR,
-        dest.path(),
-        &args(dest.path(), false, false),
-    )
-    .await
-    .unwrap();
+    let out = backup::run_with_conn(&conn, DATA_DIR, &args(dest.path(), false, false))
+        .await
+        .unwrap();
 
     assert_eq!(out.file_count, 0);
     assert_eq!(out.copied, 0);
@@ -208,14 +193,9 @@ async fn incremental_skips_local_files_with_newer_or_equal_mtime() {
     let newer = SystemTime::UNIX_EPOCH + Duration::from_secs(1_710_000_000);
     filetime::set_file_mtime(&local_pdf, filetime::FileTime::from_system_time(newer)).unwrap();
 
-    let out = backup::run_with_conn(
-        &conn,
-        DATA_DIR,
-        dest.path(),
-        &args(dest.path(), true, false),
-    )
-    .await
-    .unwrap();
+    let out = backup::run_with_conn(&conn, DATA_DIR, &args(dest.path(), true, false))
+        .await
+        .unwrap();
 
     assert!(out.incremental);
     // file_count is the total walked, copied is what survived the filter.
@@ -244,14 +224,9 @@ async fn incremental_re_fetches_local_files_with_older_mtime() {
     let older = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     filetime::set_file_mtime(&local_pdf, filetime::FileTime::from_system_time(older)).unwrap();
 
-    let out = backup::run_with_conn(
-        &conn,
-        DATA_DIR,
-        dest.path(),
-        &args(dest.path(), true, false),
-    )
-    .await
-    .unwrap();
+    let out = backup::run_with_conn(&conn, DATA_DIR, &args(dest.path(), true, false))
+        .await
+        .unwrap();
 
     assert!(out.incremental);
     assert_eq!(std::fs::read(&local_pdf).unwrap(), b"new remote bytes");
@@ -264,14 +239,9 @@ async fn incremental_first_run_acts_like_full_backup() {
     populate_xochitl(&conn);
     let dest = tempfile::tempdir().unwrap();
 
-    let out = backup::run_with_conn(
-        &conn,
-        DATA_DIR,
-        dest.path(),
-        &args(dest.path(), true, false),
-    )
-    .await
-    .unwrap();
+    let out = backup::run_with_conn(&conn, DATA_DIR, &args(dest.path(), true, false))
+        .await
+        .unwrap();
 
     assert_eq!(out.copied, out.file_count);
     assert_eq!(out.skipped, 0);

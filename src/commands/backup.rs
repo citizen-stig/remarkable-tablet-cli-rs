@@ -21,6 +21,7 @@ use std::time::SystemTime;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::BackupArgs;
@@ -28,7 +29,7 @@ use crate::commands::common::{self, CommandContext};
 use crate::connection::TabletConnection;
 use crate::error::CliError;
 use crate::output::OutputFormat;
-use crate::transfer::{self, WalkedFile};
+use crate::transfer::{self, TRANSFER_CONCURRENCY, WalkedFile};
 
 const MANIFEST_FILENAME: &str = "backup_manifest.json";
 const XOCHITL_SUBDIR: &str = "xochitl";
@@ -84,7 +85,7 @@ pub async fn execute(ctx: &CommandContext, args: &BackupArgs) -> Result<(), CliE
 
 async fn run(ctx: &CommandContext, args: &BackupArgs) -> anyhow::Result<()> {
     let session = ctx.connect().await?;
-    let result = run_with_conn(&session.ssh, ctx.data_dir(), &args.local_dir, args).await;
+    let result = run_with_conn(&session.ssh, ctx.data_dir(), args).await;
     session.ssh.disconnect().await;
     let output = result?;
     print_output(&output, ctx.format());
@@ -100,10 +101,10 @@ async fn run(ctx: &CommandContext, args: &BackupArgs) -> anyhow::Result<()> {
 pub async fn run_with_conn<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
-    local_dir: &Path,
     args: &BackupArgs,
 ) -> anyhow::Result<BackupOutput> {
     let timestamp = Utc::now();
+    let local_dir = &args.local_dir;
     let xochitl_local = local_dir.join(XOCHITL_SUBDIR);
 
     let mut files = transfer::walk_remote(conn, data_dir)
@@ -113,12 +114,11 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let total_files = files.len();
     let total_bytes: u64 = files.iter().map(|f| f.size.unwrap_or(0)).sum();
+    let manifest_entries: Vec<ManifestEntry> =
+        files.iter().map(walked_to_manifest_entry).collect();
 
     let plan: Vec<WalkedFile> = if args.incremental {
-        files
-            .into_iter()
-            .filter(|file| should_copy_incrementally(&xochitl_local, file))
-            .collect()
+        filter_incremental(files, &xochitl_local).await
     } else {
         files
     };
@@ -128,7 +128,7 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     if args.dry_run {
         return Ok(BackupOutput {
-            backup_path: local_dir.to_path_buf(),
+            backup_path: local_dir.clone(),
             timestamp,
             file_count: total_files,
             total_bytes,
@@ -164,18 +164,13 @@ pub async fn run_with_conn<C: TabletConnection>(
         Err(_) => None,
     };
 
-    // After the copy: walk the local tree once more so the manifest
-    // reflects what's actually on disk (catches any post-copy mtime
-    // skew). Cheap relative to the remote walk.
-    let manifest_files = build_manifest_entries(&xochitl_local)?;
-    let manifest_total: u64 = manifest_files.iter().map(|f| f.size).sum();
     let manifest = BackupManifest {
         version: MANIFEST_VERSION,
         timestamp,
         firmware_version: firmware_version.clone(),
-        file_count: manifest_files.len(),
-        total_bytes: manifest_total,
-        files: manifest_files,
+        file_count: manifest_entries.len(),
+        total_bytes,
+        files: manifest_entries,
     };
     let manifest_path = local_dir.join(MANIFEST_FILENAME);
     let manifest_bytes = serde_json::to_vec_pretty(&manifest).context("serialize manifest")?;
@@ -184,7 +179,7 @@ pub async fn run_with_conn<C: TabletConnection>(
         .with_context(|| format!("write {}", manifest_path.display()))?;
 
     Ok(BackupOutput {
-        backup_path: local_dir.to_path_buf(),
+        backup_path: local_dir.clone(),
         timestamp,
         file_count: total_files,
         total_bytes,
@@ -197,51 +192,43 @@ pub async fn run_with_conn<C: TabletConnection>(
     })
 }
 
-fn should_copy_incrementally(xochitl_local: &Path, file: &WalkedFile) -> bool {
-    let local_path = xochitl_local.join(&file.rel_path);
-    let Ok(local_meta) = std::fs::metadata(&local_path) else {
+async fn filter_incremental(files: Vec<WalkedFile>, xochitl_local: &Path) -> Vec<WalkedFile> {
+    let mut kept: Vec<WalkedFile> = stream::iter(files)
+        .map(|file| async move {
+            let local_path = xochitl_local.join(&file.rel_path);
+            if should_copy(&local_path, file.mtime).await {
+                Some(file)
+            } else {
+                None
+            }
+        })
+        .buffer_unordered(TRANSFER_CONCURRENCY)
+        .filter_map(|x| async move { x })
+        .collect()
+        .await;
+    kept.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    kept
+}
+
+async fn should_copy(local_path: &Path, remote_mtime: Option<SystemTime>) -> bool {
+    let Ok(local_meta) = tokio::fs::metadata(local_path).await else {
         return true; // missing locally -> must copy
     };
     let Ok(local_mtime) = local_meta.modified() else {
         return true;
     };
-    match file.mtime {
+    match remote_mtime {
         Some(remote) => remote > local_mtime,
         None => true, // no remote mtime -> assume changed
     }
 }
 
-fn build_manifest_entries(xochitl_local: &Path) -> anyhow::Result<Vec<ManifestEntry>> {
-    let mut out = Vec::new();
-    walk_local(xochitl_local, xochitl_local, &mut out)?;
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
-}
-
-fn walk_local(root: &Path, dir: &Path, out: &mut Vec<ManifestEntry>) -> anyhow::Result<()> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err).with_context(|| format!("read_dir {}", dir.display())),
-    };
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        let meta = entry.metadata()?;
-        if meta.is_dir() {
-            walk_local(root, &path, out)?;
-        } else if meta.is_file() {
-            let rel = path
-                .strip_prefix(root)
-                .with_context(|| format!("strip {}", path.display()))?;
-            out.push(ManifestEntry {
-                path: rel.to_string_lossy().into_owned(),
-                size: meta.len(),
-                mtime: meta.modified().ok().and_then(systemtime_to_datetime),
-            });
-        }
+fn walked_to_manifest_entry(f: &WalkedFile) -> ManifestEntry {
+    ManifestEntry {
+        path: f.rel_path.to_string_lossy().into_owned(),
+        size: f.size.unwrap_or(0),
+        mtime: f.mtime.and_then(systemtime_to_datetime),
     }
-    Ok(())
 }
 
 fn systemtime_to_datetime(t: SystemTime) -> Option<DateTime<Utc>> {

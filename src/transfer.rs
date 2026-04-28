@@ -23,7 +23,7 @@ use crate::connection::{RemoteFileKind, TabletConnection};
 /// Concurrency for SFTP reads when fanning out a directory walk or a
 /// batch of file downloads. Matches `metadata_loader::READ_CONCURRENCY`
 /// — keeps the SFTP pipeline saturated without overwhelming the tablet.
-const TRANSFER_CONCURRENCY: usize = 16;
+pub(crate) const TRANSFER_CONCURRENCY: usize = 16;
 
 /// One file discovered by [`walk_remote`].
 #[derive(Debug, Clone)]

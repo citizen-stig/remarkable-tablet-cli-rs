@@ -161,36 +161,40 @@ async fn download_notebook<C: TabletConnection>(
     refuse_existing(&output_dir)?;
 
     let pages_dir = format!("{data_dir}/{}", entry.uuid);
-    // Discover all `.rm` files. If the page directory itself is missing
-    // (notebook has no recorded pages yet), treat as zero pages rather
-    // than an error.
-    let entries = conn.read_dir(&pages_dir).await.unwrap_or_default();
+    let content_path = format!("{data_dir}/{}.content", entry.uuid);
+    // Page-dir listing and `.content` are independent SFTP reads; running
+    // them concurrently saves one round-trip on a slow tablet link. A
+    // missing page directory (notebook has no recorded pages yet) is
+    // tolerated as zero pages.
+    let (entries_res, content_res) =
+        tokio::join!(conn.read_dir(&pages_dir), conn.read_file(&content_path));
+    let entries = entries_res.unwrap_or_default();
     let mut page_files: Vec<String> = entries
         .into_iter()
         .filter(|e| {
-            std::path::Path::new(&e.name)
+            Path::new(&e.name)
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("rm"))
         })
         .map(|e| e.name)
         .collect();
 
-    let ordered = order_page_files(conn, data_dir, entry.uuid, &mut page_files).await;
+    let ordered = order_page_files(content_res.ok().as_deref(), &mut page_files);
 
-    let selected: Vec<&String> = match pages {
+    let selected: Vec<&str> = match pages {
         Some(sel) => ordered
             .iter()
             .enumerate()
             .filter_map(|(idx, name)| {
                 let one_based = u32::try_from(idx + 1).ok()?;
                 if sel.contains(one_based) {
-                    Some(name)
+                    Some(name.as_str())
                 } else {
                     None
                 }
             })
             .collect(),
-        None => ordered.iter().collect(),
+        None => ordered.iter().map(String::as_str).collect(),
     };
 
     tokio::fs::create_dir_all(&output_dir)
@@ -199,12 +203,7 @@ async fn download_notebook<C: TabletConnection>(
 
     let jobs: Vec<(String, PathBuf)> = selected
         .iter()
-        .map(|name| {
-            (
-                format!("{pages_dir}/{name}"),
-                output_dir.join(name.as_str()),
-            )
-        })
+        .map(|name| (format!("{pages_dir}/{name}"), output_dir.join(name)))
         .collect();
     let pages_count = jobs.len();
     let total_bytes = transfer::download_many(conn, jobs)
@@ -227,18 +226,12 @@ async fn download_notebook<C: TabletConnection>(
 /// pages listed in `.content` but missing on disk are silently dropped,
 /// and any orphan `.rm` files not referenced by `.content` are appended
 /// at the end.
-async fn order_page_files<C: TabletConnection>(
-    conn: &C,
-    data_dir: &str,
-    uuid: Uuid,
-    discovered: &mut Vec<String>,
-) -> Vec<String> {
+fn order_page_files(content_bytes: Option<&[u8]>, discovered: &mut Vec<String>) -> Vec<String> {
     discovered.sort();
-    let content_path = format!("{data_dir}/{uuid}.content");
-    let Ok(bytes) = conn.read_file(&content_path).await else {
+    let Some(bytes) = content_bytes else {
         return std::mem::take(discovered);
     };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return std::mem::take(discovered);
     };
     let Some(pages_value) = value.get("pages") else {
@@ -264,19 +257,14 @@ async fn order_page_files<C: TabletConnection>(
     ordered
 }
 
-fn extract_page_id(item: &serde_json::Value) -> Option<String> {
+fn extract_page_id(item: &serde_json::Value) -> Option<&str> {
     if let Some(s) = item.as_str() {
-        return Some(s.to_string());
+        return Some(s);
     }
-    if let Some(obj) = item.as_object() {
-        if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
-            return Some(id.to_string());
-        }
-        if let Some(id) = obj.get("uuid").and_then(|v| v.as_str()) {
-            return Some(id.to_string());
-        }
-    }
-    None
+    let obj = item.as_object()?;
+    obj.get("id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| obj.get("uuid").and_then(serde_json::Value::as_str))
 }
 
 fn refuse_existing(path: &Path) -> anyhow::Result<()> {
