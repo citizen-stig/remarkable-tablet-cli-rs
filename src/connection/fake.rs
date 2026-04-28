@@ -11,6 +11,10 @@ pub struct FakeConnection {
     root: TempDir,
     commands: std::sync::Mutex<Vec<(String, String)>>,
     read_errors: std::sync::Mutex<HashMap<String, String>>,
+    /// Every command that flowed through `execute()`, in call order.
+    /// Tests of mutating commands use this to verify xochitl stop/start
+    /// is bracketed correctly around writes.
+    executed_commands: std::sync::Mutex<Vec<String>>,
 }
 
 impl FakeConnection {
@@ -22,6 +26,7 @@ impl FakeConnection {
             root: tempfile::tempdir().expect("tempdir"),
             commands: std::sync::Mutex::new(Vec::new()),
             read_errors: std::sync::Mutex::new(HashMap::new()),
+            executed_commands: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -79,6 +84,16 @@ impl FakeConnection {
             .lock()
             .unwrap()
             .insert(path.to_string(), message.to_string());
+    }
+
+    /// Snapshot of every command passed to `execute()` in call order.
+    /// Captured regardless of whether the command had a registered output.
+    ///
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
+    #[must_use]
+    pub fn executed_commands(&self) -> Vec<String> {
+        self.executed_commands.lock().unwrap().clone()
     }
 }
 
@@ -138,6 +153,10 @@ impl TabletConnection for FakeConnection {
     }
 
     async fn execute(&self, command: &str) -> anyhow::Result<String> {
+        self.executed_commands
+            .lock()
+            .unwrap()
+            .push(command.to_string());
         let cmds = self.commands.lock().unwrap();
         for (substr, output) in cmds.iter() {
             if command.contains(substr) {

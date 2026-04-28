@@ -4,6 +4,7 @@ use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
 
 use crate::connection::TabletConnection;
+use crate::error::CliError;
 
 pub use crate::metadata_loader::{LoadDiagnostics, load_all_metadata, load_all_metadata_full};
 
@@ -72,6 +73,32 @@ pub async fn fetch_device_info<C: TabletConnection>(
         disk_used_mb,
         disk_free_mb,
     })
+}
+
+/// Stop the xochitl document service. Mutating commands must run this before
+/// touching `.metadata` / `.content` / source files so xochitl doesn't write
+/// over them or read a half-written tree.
+///
+/// # Errors
+/// Returns [`CliError::XochitlError`] if the SSH command fails.
+pub async fn stop_xochitl<C: TabletConnection>(conn: &C) -> anyhow::Result<()> {
+    conn.execute("systemctl stop xochitl")
+        .await
+        .map_err(|e| CliError::XochitlError(format!("stop xochitl: {e:#}")))?;
+    Ok(())
+}
+
+/// Start the xochitl document service after a deliberate [`stop_xochitl`].
+/// Pair the two; do not use `systemctl restart` here — that's the deferred
+/// `restart` command's job (SPEC §3.15).
+///
+/// # Errors
+/// Returns [`CliError::XochitlError`] if the SSH command fails.
+pub async fn start_xochitl<C: TabletConnection>(conn: &C) -> anyhow::Result<()> {
+    conn.execute("systemctl start xochitl")
+        .await
+        .map_err(|e| CliError::XochitlError(format!("start xochitl: {e:#}")))?;
+    Ok(())
 }
 
 async fn fetch_firmware<C: TabletConnection>(conn: &C) -> anyhow::Result<String> {

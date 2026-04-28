@@ -9,6 +9,7 @@ use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::fs::Metadata;
 use russh_sftp::protocol::FileType as SftpFileType;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
@@ -217,10 +218,22 @@ impl TabletConnection for SshConnection {
     }
 
     async fn write_file(&self, path: &str, data: &[u8]) -> anyhow::Result<()> {
-        self.sftp
-            .write(path, data)
+        // `Sftp::write` opens with `OpenFlags::WRITE` only — missing `CREATE`,
+        // so it fails on new files with "No such file". `create` opens with
+        // `CREATE | TRUNCATE | WRITE`, which is what we want for both new
+        // writes and overwrites.
+        let mut file = self
+            .sftp
+            .create(path)
             .await
-            .with_context(|| format!("sftp write {path}"))
+            .with_context(|| format!("sftp create {path}"))?;
+        file.write_all(data)
+            .await
+            .with_context(|| format!("sftp write {path}"))?;
+        file.shutdown()
+            .await
+            .with_context(|| format!("sftp close {path}"))?;
+        Ok(())
     }
 
     async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<RemoteEntry>> {

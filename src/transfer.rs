@@ -125,6 +125,28 @@ pub async fn download_file<C: TabletConnection>(
     Ok(len)
 }
 
+/// Copy one local file to a remote path. Returns the number of bytes written.
+/// The remote's parent directory must already exist (xochitl's `data_dir`
+/// always does); this matches `SshConnection::write_file`'s contract.
+///
+/// # Errors
+/// Returns an error if the local read fails or the remote write fails.
+pub async fn upload_file<C: TabletConnection>(
+    conn: &C,
+    local: impl AsRef<Path>,
+    remote: &str,
+) -> anyhow::Result<u64> {
+    let local = local.as_ref();
+    let bytes = tokio::fs::read(local)
+        .await
+        .with_context(|| format!("read local {}", local.display()))?;
+    let len = bytes.len() as u64;
+    conn.write_file(remote, &bytes)
+        .await
+        .with_context(|| format!("write remote {remote}"))?;
+    Ok(len)
+}
+
 /// Copy a batch of files in parallel. Returns total bytes written.
 /// Aborts on the first failure (see `try_collect` semantics).
 ///

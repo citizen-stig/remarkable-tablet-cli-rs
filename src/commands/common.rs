@@ -125,6 +125,13 @@ impl CommandContext {
         &self.config.data_dir
     }
 
+    /// Whether the user passed `--no-restart`, suppressing the
+    /// xochitl restart that mutating commands normally perform.
+    #[must_use]
+    pub fn no_restart(&self) -> bool {
+        self.global.no_restart
+    }
+
     pub fn log_verbose(&self, msg: &str) {
         output::log_verbose(&self.global, msg);
     }

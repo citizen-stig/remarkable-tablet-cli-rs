@@ -276,13 +276,18 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 ### ~Phase 2: Data Transfer
 5. +**Backup** — SFTP recursive copy, incremental mode, manifest. Deliverable: `remarkable-cli backup ./backups`.
 6. +**Download** — Single document fetch. Deliverable: `remarkable-cli download <uuid> --output ./doc.pdf`.
-7. **Upload** — UUID generation, metadata creation, file transfer, xochitl restart. Deliverable: `remarkable-cli upload paper.pdf --parent /Research`.
+7. ~**Upload** — UUID generation, metadata creation, file transfer, xochitl restart. Deliverable: `remarkable-cli upload paper.pdf --parent /Research`.
 
 ### Phase 3: File Organization
 8. **Mutation commands** — `mv`, `mkdir`, `rename` with xochitl stop/restart. Deliverable: reorganize tablet files.
 9. **Deletion commands** — `rm` (soft + permanent). Deliverable: complete file lifecycle.
 
 ### Phase 4: Rendering *(deferred — not in MVP)*
+Preparation:
+ - split into workspace with crates:
+    - browser (think of better name): connection, metadata, file manipulation, download/upload
+    - rm-parser: New crate that we will be working on
+    - cli: Only CLI params and handling of things
 10. **.rm binary parser** — Parse v3-v6 format into stroke data. Unit tests with sample files.
 11. **PNG rendering** — Rasterize strokes, `remarkable-cli render` command. Deliverable: PNG output of notebook pages.
 
