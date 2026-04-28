@@ -2,9 +2,9 @@
 //!
 //! For each input PDF/ePub:
 //! 1. Generate a UUID v4.
-//! 2. Write `<uuid>.metadata` with parent + timestamps.
+//! 2. Transfer the source file as `<uuid>.<ext>`.
 //! 3. Write `<uuid>.content` with the file type.
-//! 4. Transfer the source file as `<uuid>.<ext>`.
+//! 4. Write `<uuid>.metadata` with parent + timestamps.
 //!
 //! xochitl is stopped once before the first write and started once after
 //! the last write (skipped under `--no-restart`). On failure the start is
@@ -82,8 +82,7 @@ pub async fn execute(ctx: &CommandContext, args: &UploadArgs) -> Result<(), CliE
 
 async fn run(ctx: &CommandContext, args: &UploadArgs) -> anyhow::Result<()> {
     let (session, tree) = ctx.connect_and_load_tree().await?;
-    let result =
-        run_with_conn(&session.ssh, ctx.data_dir(), &tree, args, ctx.no_restart()).await;
+    let result = run_with_conn(&session.ssh, ctx.data_dir(), &tree, args, ctx.no_restart()).await;
     session.ssh.disconnect().await;
     let out = result?;
     print_output(&out, ctx.format());
@@ -170,45 +169,92 @@ async fn perform_uploads<C: TabletConnection>(
     let now = Utc::now();
     let mut out = Vec::with_capacity(plans.len());
     for plan in plans {
-        let metadata = RawMetadata {
-            visible_name: plan.name.clone(),
-            item_type: ItemType::Document,
-            parent: parent.clone(),
-            deleted: false,
-            pinned: false,
-            last_modified: now,
-            metadata_modified: Some(now),
-            version: 1,
-            tags: vec![],
-            last_opened: None,
-        };
-        conn.write_file(
-            &format!("{data_dir}/{}.metadata", plan.uuid),
-            &serde_json::to_vec(&metadata)?,
-        )
-        .await?;
-
-        let content = RawContent {
-            file_type: plan.file_type,
-            page_count: None,
-            pages: None,
-        };
-        conn.write_file(
-            &format!("{data_dir}/{}.content", plan.uuid),
-            &serde_json::to_vec(&content)?,
-        )
-        .await?;
-
-        transfer::upload_file(
-            conn,
-            &plan.source_path,
-            &format!("{data_dir}/{}.{}", plan.uuid, plan.file_type.extension()),
-        )
-        .await?;
-
-        out.push(plan.into());
+        out.push(upload_one(conn, data_dir, plan, parent, now).await?);
     }
     Ok(out)
+}
+
+async fn upload_one<C: TabletConnection>(
+    conn: &C,
+    data_dir: &str,
+    plan: Plan,
+    parent: &Parent,
+    now: chrono::DateTime<Utc>,
+) -> anyhow::Result<UploadedDocument> {
+    let source_remote = format!("{data_dir}/{}.{}", plan.uuid, plan.file_type.extension());
+    let content_remote = format!("{data_dir}/{}.content", plan.uuid);
+    let metadata_remote = format!("{data_dir}/{}.metadata", plan.uuid);
+    let cleanup_paths = vec![
+        source_remote.clone(),
+        content_remote.clone(),
+        metadata_remote.clone(),
+    ];
+
+    let metadata = RawMetadata {
+        visible_name: plan.name.clone(),
+        item_type: ItemType::Document,
+        parent: parent.clone(),
+        deleted: false,
+        pinned: false,
+        last_modified: now,
+        metadata_modified: Some(now),
+        version: 1,
+        tags: vec![],
+        last_opened: None,
+    };
+    let content = RawContent {
+        file_type: plan.file_type,
+        page_count: None,
+        pages: None,
+    };
+
+    let write_result: anyhow::Result<()> = async {
+        transfer::upload_file(conn, &plan.source_path, &source_remote).await?;
+        conn.write_file(&content_remote, &serde_json::to_vec(&content)?)
+            .await?;
+        conn.write_file(&metadata_remote, &serde_json::to_vec(&metadata)?)
+            .await?;
+        Ok(())
+    }
+    .await;
+
+    match write_result {
+        Ok(()) => Ok(plan.into()),
+        Err(err) => match cleanup_partial_upload(conn, &cleanup_paths).await {
+            Ok(()) => Err(err),
+            Err(cleanup_err) => Err(err.context(format!(
+                "cleanup after failed upload for {} ({}) left remote state uncertain: {cleanup_err:#}",
+                plan.name, plan.uuid
+            ))),
+        },
+    }
+}
+
+async fn cleanup_partial_upload<C: TabletConnection>(
+    conn: &C,
+    cleanup_paths: &[String],
+) -> anyhow::Result<()> {
+    let mut failures = Vec::new();
+    for path in cleanup_paths.iter().rev() {
+        match conn.file_exists(path).await {
+            Ok(true) => {
+                if let Err(err) = conn.remove_file(path).await {
+                    failures.push(format!("{path}: {err:#}"));
+                }
+            }
+            Ok(false) => {}
+            Err(err) => failures.push(format!("check {path}: {err:#}")),
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "failed to remove partial remote files: {}",
+            failures.join("; ")
+        ))
+    }
 }
 
 async fn build_plan(file_str: &str, name_override: Option<&str>) -> anyhow::Result<Plan> {

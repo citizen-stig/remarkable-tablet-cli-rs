@@ -6,12 +6,13 @@
 //!   filenames mirroring the tablet's remote layout (`<page-uuid>.rm`).
 //!
 //! `--pages` is a 1-indexed selection over the page order recorded in
-//! the document's `.content` JSON; if that ordering can't be recovered
-//! we fall back to sorted filename order.
+//! the document's `.content` JSON. Full notebook downloads fall back to
+//! sorted filenames if that ordering can't be recovered, but `--pages`
+//! requires readable page-order data.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -19,7 +20,7 @@ use crate::cli::DownloadArgs;
 use crate::commands::common::{self, CommandContext};
 use crate::connection::TabletConnection;
 use crate::error::CliError;
-use crate::metadata::{DocumentEntry, FileType, ItemKind};
+use crate::metadata::{self, DocumentEntry, FileType, ItemKind};
 use crate::output::{self, OutputFormat};
 use crate::page_range::PageSelection;
 use crate::path_resolver::{self, Resolved};
@@ -164,11 +165,33 @@ async fn download_notebook<C: TabletConnection>(
     let content_path = format!("{data_dir}/{}.content", entry.uuid);
     // Page-dir listing and `.content` are independent SFTP reads; running
     // them concurrently saves one round-trip on a slow tablet link. A
-    // missing page directory (notebook has no recorded pages yet) is
-    // tolerated as zero pages.
+    // missing page directory is only tolerated when the notebook's
+    // `.content` proves it has zero pages.
     let (entries_res, content_res) =
         tokio::join!(conn.read_dir(&pages_dir), conn.read_file(&content_path));
-    let entries = entries_res.unwrap_or_default();
+    let content_bytes = match content_res {
+        Ok(bytes) => Some(bytes),
+        Err(err) if pages.is_some() => {
+            return Err(err).with_context(|| {
+                format!(
+                    "readable notebook page order required from {content_path} when using --pages"
+                )
+            });
+        }
+        Err(_) => None,
+    };
+    let entries = match entries_res {
+        Ok(entries) => entries,
+        Err(err) => {
+            if can_treat_missing_page_dir_as_empty(conn, &pages_dir, content_bytes.as_deref())
+                .await?
+            {
+                Vec::new()
+            } else {
+                return Err(err).with_context(|| format!("list {pages_dir}"));
+            }
+        }
+    };
     let mut page_files: Vec<String> = entries
         .into_iter()
         .filter(|e| {
@@ -179,7 +202,17 @@ async fn download_notebook<C: TabletConnection>(
         .map(|e| e.name)
         .collect();
 
-    let ordered = order_page_files(content_res.ok().as_deref(), &mut page_files);
+    let ordered = match pages {
+        Some(_) => order_page_files_strict(
+            content_bytes.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "readable notebook page order required from {content_path} when using --pages"
+                )
+            })?,
+            &mut page_files,
+        )?,
+        None => order_page_files_best_effort(content_bytes.as_deref(), &mut page_files),
+    };
 
     let selected: Vec<&str> = match pages {
         Some(sel) => ordered
@@ -220,35 +253,74 @@ async fn download_notebook<C: TabletConnection>(
     })
 }
 
-/// Try to recover the page order recorded in the document's `.content`
-/// file; fall back to sorted filename order when the JSON shape isn't
-/// understood. The returned vector contains every `.rm` filename — any
-/// pages listed in `.content` but missing on disk are silently dropped,
-/// and any orphan `.rm` files not referenced by `.content` are appended
-/// at the end.
-fn order_page_files(content_bytes: Option<&[u8]>, discovered: &mut Vec<String>) -> Vec<String> {
-    discovered.sort();
+async fn can_treat_missing_page_dir_as_empty<C: TabletConnection>(
+    conn: &C,
+    pages_dir: &str,
+    content_bytes: Option<&[u8]>,
+) -> anyhow::Result<bool> {
+    if conn
+        .file_exists(pages_dir)
+        .await
+        .with_context(|| format!("stat {pages_dir}"))?
+    {
+        return Ok(false);
+    }
     let Some(bytes) = content_bytes else {
-        return std::mem::take(discovered);
+        return Ok(false);
     };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
-        return std::mem::take(discovered);
+    let Ok(content) = metadata::parse_content(bytes) else {
+        return Ok(false);
     };
-    let Some(pages_value) = value.get("pages") else {
+    Ok(content.effective_page_count() == Some(0))
+}
+
+/// Best-effort page ordering for full notebook downloads: try to recover
+/// the order from `.content`, otherwise fall back to sorted filenames.
+fn order_page_files_best_effort(
+    content_bytes: Option<&[u8]>,
+    discovered: &mut Vec<String>,
+) -> Vec<String> {
+    let pages = content_bytes
+        .and_then(|bytes| metadata::parse_content(bytes).ok())
+        .and_then(|content| content.pages);
+    order_page_files_from_pages(pages.as_deref(), discovered)
+}
+
+/// Strict page ordering for `--pages`: callers must provide readable
+/// `.content` bytes that include a `pages` array.
+fn order_page_files_strict(
+    content_bytes: &[u8],
+    discovered: &mut Vec<String>,
+) -> anyhow::Result<Vec<String>> {
+    let content = metadata::parse_content(content_bytes).context("parse notebook .content")?;
+    let Some(pages) = content.pages.as_deref() else {
+        bail!("notebook .content is missing a pages array; --pages requires recorded page order");
+    };
+    Ok(order_page_files_from_pages(Some(pages), discovered))
+}
+
+/// Build a page list from the known `pages` ordering. The returned vector
+/// contains every discovered `.rm` filename — any pages listed in
+/// `.content` but missing on disk are silently dropped, and any orphan
+/// `.rm` files not referenced by `.content` are appended at the end.
+fn order_page_files_from_pages(
+    pages: Option<&[serde_json::Value]>,
+    discovered: &mut Vec<String>,
+) -> Vec<String> {
+    discovered.sort();
+    let Some(arr) = pages else {
         return std::mem::take(discovered);
     };
 
     let mut ordered = Vec::with_capacity(discovered.len());
     let mut remaining: std::collections::HashSet<String> = discovered.iter().cloned().collect();
-    if let Some(arr) = pages_value.as_array() {
-        for item in arr {
-            let Some(page_id) = extract_page_id(item) else {
-                continue;
-            };
-            let filename = format!("{page_id}.rm");
-            if remaining.remove(&filename) {
-                ordered.push(filename);
-            }
+    for item in arr {
+        let Some(page_id) = extract_page_id(item) else {
+            continue;
+        };
+        let filename = format!("{page_id}.rm");
+        if remaining.remove(&filename) {
+            ordered.push(filename);
         }
     }
     let mut leftover: Vec<String> = remaining.into_iter().collect();

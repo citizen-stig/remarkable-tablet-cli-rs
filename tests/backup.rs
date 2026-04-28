@@ -246,3 +246,25 @@ async fn incremental_first_run_acts_like_full_backup() {
     assert_eq!(out.copied, out.file_count);
     assert_eq!(out.skipped, 0);
 }
+
+#[tokio::test]
+async fn backup_fails_when_firmware_version_cannot_be_read() {
+    let conn = FakeConnection::new();
+    populate_xochitl(&conn);
+    conn.set_read_error("/etc/version", "permission denied");
+    let dest = tempfile::tempdir().unwrap();
+
+    let err = backup::run_with_conn(&conn, DATA_DIR, &args(dest.path(), false, false))
+        .await
+        .unwrap_err();
+
+    assert!(err.to_string().contains("/etc/version"));
+    assert!(
+        dest.path()
+            .join("xochitl")
+            .join(format!("{DOC_PDF_UUID}.pdf"))
+            .exists()
+    );
+    assert!(!dest.path().join("version").exists());
+    assert!(!dest.path().join("backup_manifest.json").exists());
+}

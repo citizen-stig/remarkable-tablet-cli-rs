@@ -11,6 +11,8 @@ pub struct FakeConnection {
     root: TempDir,
     commands: std::sync::Mutex<Vec<(String, String)>>,
     read_errors: std::sync::Mutex<HashMap<String, String>>,
+    read_dir_errors: std::sync::Mutex<HashMap<String, String>>,
+    write_error_suffixes: std::sync::Mutex<Vec<(String, String)>>,
     /// Every command that flowed through `execute()`, in call order.
     /// Tests of mutating commands use this to verify xochitl stop/start
     /// is bracketed correctly around writes.
@@ -26,6 +28,8 @@ impl FakeConnection {
             root: tempfile::tempdir().expect("tempdir"),
             commands: std::sync::Mutex::new(Vec::new()),
             read_errors: std::sync::Mutex::new(HashMap::new()),
+            read_dir_errors: std::sync::Mutex::new(HashMap::new()),
+            write_error_suffixes: std::sync::Mutex::new(Vec::new()),
             executed_commands: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -86,6 +90,24 @@ impl FakeConnection {
             .insert(path.to_string(), message.to_string());
     }
 
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
+    pub fn set_read_dir_error(&self, path: &str, message: &str) {
+        self.read_dir_errors
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), message.to_string());
+    }
+
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
+    pub fn set_write_error_suffix(&self, suffix: &str, message: &str) {
+        self.write_error_suffixes
+            .lock()
+            .unwrap()
+            .push((suffix.to_string(), message.to_string()));
+    }
+
     /// Snapshot of every command passed to `execute()` in call order.
     /// Captured regardless of whether the command had a registered output.
     ///
@@ -115,6 +137,18 @@ impl TabletConnection for FakeConnection {
     }
 
     async fn write_file(&self, path: &str, data: &[u8]) -> anyhow::Result<()> {
+        if let Some((suffix, message)) = self
+            .write_error_suffixes
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(suffix, _)| path.ends_with(suffix.as_str()))
+            .cloned()
+        {
+            return Err(anyhow!(
+                "fake injected write_file error for {path} matching suffix {suffix}: {message}"
+            ));
+        }
         let p = self.local(path);
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
@@ -123,6 +157,11 @@ impl TabletConnection for FakeConnection {
     }
 
     async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<RemoteEntry>> {
+        if let Some(message) = self.read_dir_errors.lock().unwrap().get(path).cloned() {
+            return Err(anyhow!(
+                "fake injected read_dir error for {path}: {message}"
+            ));
+        }
         let p = self.local(path);
         let entries =
             std::fs::read_dir(&p).with_context(|| format!("fake read_dir {}", p.display()))?;

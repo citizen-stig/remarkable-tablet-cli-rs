@@ -21,6 +21,7 @@ const PAGE_UUID_2: &str = "22222222-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const PAGE_UUID_3: &str = "33333333-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const NOTEBOOK_NAMED_SLASH_UUID: &str = "dddddddd-1111-1111-1111-111111111111";
 const EMPTY_NOTEBOOK_UUID: &str = "eeeeeeee-1111-1111-1111-111111111111";
+const NOTEBOOK_MISSING_DIR_UUID: &str = "ffffffff-1111-1111-1111-111111111111";
 
 fn populate(conn: &FakeConnection) {
     conn.mkdir(DATA_DIR);
@@ -106,6 +107,17 @@ fn populate(conn: &FakeConnection) {
     conn.set_file(
         &format!("{DATA_DIR}/{EMPTY_NOTEBOOK_UUID}.content"),
         br#"{"fileType":"notebook","pages":[]}"#,
+    );
+
+    // Notebook whose `.content` records pages but whose page directory is
+    // missing, used to confirm we don't silently treat that as empty.
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_MISSING_DIR_UUID}.metadata"),
+        br#"{"visibleName":"Missing Dir","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710800000000,"metadatamodified":1710800000000,"version":1}"#,
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_MISSING_DIR_UUID}.content"),
+        format!(r#"{{"fileType":"notebook","pages":[{{"id":"{PAGE_UUID_1}"}}]}}"#).as_bytes(),
     );
 }
 
@@ -342,4 +354,129 @@ async fn download_empty_notebook_creates_empty_dir() {
     assert_eq!(out.size_bytes, 0);
     assert!(out_dir.exists() && out_dir.is_dir());
     assert!(std::fs::read_dir(&out_dir).unwrap().next().is_none());
+}
+
+#[tokio::test]
+async fn download_nonempty_notebook_with_missing_page_dir_fails() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    let tree = build_tree(&conn).await;
+    let dest_dir = tempfile::tempdir().unwrap();
+
+    let err = download::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &args(
+            NOTEBOOK_MISSING_DIR_UUID,
+            Some(dest_dir.path().join("missing-dir")),
+            None,
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains(NOTEBOOK_MISSING_DIR_UUID));
+}
+
+#[tokio::test]
+async fn download_notebook_page_dir_read_error_fails() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    let tree = build_tree(&conn).await;
+    conn.set_read_dir_error(&format!("{DATA_DIR}/{NOTEBOOK_UUID}"), "permission denied");
+    let dest_dir = tempfile::tempdir().unwrap();
+    let out_dir = dest_dir.path().join("sketches");
+
+    let err = download::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &args(NOTEBOOK_UUID, Some(out_dir.clone()), None),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains(&format!("{DATA_DIR}/{NOTEBOOK_UUID}"))
+    );
+    assert!(!out_dir.exists());
+}
+
+#[tokio::test]
+async fn download_notebook_pages_requires_readable_content() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    let tree = build_tree(&conn).await;
+    conn.set_read_error(
+        &format!("{DATA_DIR}/{NOTEBOOK_UUID}.content"),
+        "permission denied",
+    );
+    let dest_dir = tempfile::tempdir().unwrap();
+
+    let err = download::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &args(
+            NOTEBOOK_UUID,
+            Some(dest_dir.path().join("subset")),
+            Some("1-2"),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("readable notebook page order"));
+}
+
+#[tokio::test]
+async fn download_notebook_pages_requires_pages_array() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    let tree = build_tree(&conn).await;
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_UUID}.content"),
+        br#"{"fileType":"notebook","pageCount":3}"#,
+    );
+    let dest_dir = tempfile::tempdir().unwrap();
+
+    let err = download::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &args(
+            NOTEBOOK_UUID,
+            Some(dest_dir.path().join("subset")),
+            Some("1-2"),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("pages array"));
+}
+
+#[tokio::test]
+async fn download_notebook_without_pages_filter_tolerates_unreadable_content() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    let tree = build_tree(&conn).await;
+    conn.set_read_error(
+        &format!("{DATA_DIR}/{NOTEBOOK_UUID}.content"),
+        "permission denied",
+    );
+    let dest_dir = tempfile::tempdir().unwrap();
+    let out_dir = dest_dir.path().join("all-pages");
+
+    let out = download::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &args(NOTEBOOK_UUID, Some(out_dir.clone()), None),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out.pages_written, Some(3));
+    assert!(out_dir.join(format!("{PAGE_UUID_1}.rm")).exists());
+    assert!(out_dir.join(format!("{PAGE_UUID_2}.rm")).exists());
+    assert!(out_dir.join(format!("{PAGE_UUID_3}.rm")).exists());
 }

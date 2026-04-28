@@ -114,8 +114,7 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let total_files = files.len();
     let total_bytes: u64 = files.iter().map(|f| f.size.unwrap_or(0)).sum();
-    let manifest_entries: Vec<ManifestEntry> =
-        files.iter().map(walked_to_manifest_entry).collect();
+    let manifest_entries: Vec<ManifestEntry> = files.iter().map(walked_to_manifest_entry).collect();
 
     let plan: Vec<WalkedFile> = if args.incremental {
         filter_incremental(files, &xochitl_local).await
@@ -153,16 +152,15 @@ pub async fn run_with_conn<C: TabletConnection>(
         .await
         .context("download xochitl tree")?;
 
-    let firmware_version = match conn.read_file(FIRMWARE_REMOTE_PATH).await {
-        Ok(bytes) => {
-            let firmware_local = local_dir.join(FIRMWARE_FILENAME);
-            tokio::fs::write(&firmware_local, &bytes)
-                .await
-                .with_context(|| format!("write {}", firmware_local.display()))?;
-            Some(String::from_utf8_lossy(&bytes).trim().to_string())
-        }
-        Err(_) => None,
-    };
+    let firmware_bytes = conn
+        .read_file(FIRMWARE_REMOTE_PATH)
+        .await
+        .with_context(|| format!("read {FIRMWARE_REMOTE_PATH}"))?;
+    let firmware_local = local_dir.join(FIRMWARE_FILENAME);
+    tokio::fs::write(&firmware_local, &firmware_bytes)
+        .await
+        .with_context(|| format!("write {}", firmware_local.display()))?;
+    let firmware_version = Some(String::from_utf8_lossy(&firmware_bytes).trim().to_string());
 
     let manifest = BackupManifest {
         version: MANIFEST_VERSION,
