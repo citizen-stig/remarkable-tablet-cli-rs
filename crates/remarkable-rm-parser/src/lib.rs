@@ -4,11 +4,21 @@
 //! (versions 3 through 6). This crate decodes the bytes into stroke data
 //! and rasterizes the strokes to PNG.
 //!
-//! The format is documented in `RM_FORMAT_V6_SPEC.md` at the workspace
-//! root. Implementation is deferred to Phase 4 of the project SPEC.
+//! The wire format is documented in `RM_FORMAT_V6_SPEC.md` at the workspace
+//! root. The implementation matches that document section-by-section.
+//!
+//! Phase status: type skeleton in place; parsing bodies are Phase 4 step 10.
 
-#[derive(Debug, thiserror::Error)]
-pub enum ParseError {
-    #[error("not yet implemented")]
-    NotImplemented,
-}
+pub mod blocks;
+pub mod crdt;
+pub mod document;
+pub mod error;
+pub mod primitives;
+pub mod scene;
+pub mod tag;
+
+pub use blocks::{BlockHeader, BlockType};
+pub use crdt::{CrdtId, LwwValue};
+pub use document::{Layer, Page};
+pub use error::{ParseError, Result};
+pub use scene::line::{Line, Pen, PenColor, Point};

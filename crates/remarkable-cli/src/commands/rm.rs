@@ -59,8 +59,7 @@ impl DeletedItem {
     fn from_entry(tree: &DocumentTree, entry: &DocumentEntry) -> Self {
         let path = tree
             .display_path(&entry.uuid)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("/{}", entry.visible_name));
+            .map_or_else(|| format!("/{}", entry.visible_name), str::to_string);
         Self {
             uuid: entry.uuid,
             name: entry.visible_name.clone(),

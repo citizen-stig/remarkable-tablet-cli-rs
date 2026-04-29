@@ -14,7 +14,7 @@ struct ParsedCli {
 
 pub async fn run() -> i32 {
     let parsed = ParsedCli::parse();
-    let ctx = match build_context(&parsed.cli.global, &parsed.sources, None) {
+    let ctx = match build_context(&parsed.cli.global, parsed.sources, None) {
         Ok(ctx) => ctx,
         Err(startup) => {
             output::print_error(&startup.error, startup.format);
@@ -49,7 +49,7 @@ async fn dispatch(ctx: &CommandContext, command: &Command) -> Result<(), CliErro
 
 fn build_context(
     global: &crate::cli::GlobalOptions,
-    sources: &GlobalOptionSources,
+    sources: GlobalOptionSources,
     config_path: Option<&Path>,
 ) -> Result<CommandContext, StartupError> {
     let preferred_format = startup_error_format(global.format, sources.format);
@@ -57,7 +57,7 @@ fn build_context(
         error: crate::error::CliError::IoError(format!("config error: {err:#}")),
         format: preferred_format,
     })?;
-    let resolved = config::resolve(global, sources, &file_cfg);
+    let resolved = config::resolve(global, &sources, &file_cfg);
     Ok(CommandContext::new(global.clone(), resolved))
 }
 
@@ -124,7 +124,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "format = { definitely = 'not valid toml' }").unwrap();
 
-        let err = build_context(&base_global(), &default_sources(), Some(&path)).unwrap_err();
+        let err = build_context(&base_global(), default_sources(), Some(&path)).unwrap_err();
         assert!(matches!(err.error, crate::error::CliError::IoError(_)));
         assert!(err.error.to_string().contains("config error"));
     }
@@ -135,7 +135,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "format = \"json\"\n").unwrap();
 
-        let ctx = build_context(&base_global(), &default_sources(), Some(&path)).unwrap();
+        let ctx = build_context(&base_global(), default_sources(), Some(&path)).unwrap();
         assert_eq!(ctx.format(), output::OutputFormat::Json);
     }
 }

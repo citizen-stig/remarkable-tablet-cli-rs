@@ -323,8 +323,7 @@ fn resolve_parent(
             }
             let path = tree
                 .display_path(&e.uuid)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("/{}", e.visible_name));
+                .map_or_else(|| format!("/{}", e.visible_name), str::to_string);
             Ok((Parent::Folder(e.uuid), Some(e.uuid), path))
         }
     }

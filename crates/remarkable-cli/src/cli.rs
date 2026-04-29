@@ -87,6 +87,7 @@ pub enum CliValueSource {
 }
 
 impl CliValueSource {
+    #[must_use]
     pub fn is_explicit(self) -> bool {
         matches!(self, Self::CommandLine | Self::EnvVariable)
     }
@@ -97,8 +98,7 @@ impl From<Option<ValueSource>> for CliValueSource {
         match value {
             Some(ValueSource::CommandLine) => Self::CommandLine,
             Some(ValueSource::EnvVariable) => Self::EnvVariable,
-            Some(ValueSource::DefaultValue) => Self::DefaultValue,
-            Some(_) => Self::DefaultValue,
+            Some(ValueSource::DefaultValue | _) => Self::DefaultValue,
             None => Self::Unset,
         }
     }
@@ -117,6 +117,7 @@ pub struct GlobalOptionSources {
 }
 
 impl GlobalOptionSources {
+    #[must_use]
     pub fn from_matches(matches: &ArgMatches) -> Self {
         Self {
             host: matches.value_source("host").into(),

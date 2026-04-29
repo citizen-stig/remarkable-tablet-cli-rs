@@ -717,6 +717,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn display_path_returns_none_for_cyclic_parent_chain_but_keeps_other_fallbacks() {
         let folder_a_uuid = Uuid::parse_str(FOLDER_A).unwrap();
         let folder_b_uuid = Uuid::parse_str(FOLDER_B).unwrap();

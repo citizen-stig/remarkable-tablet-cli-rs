@@ -73,8 +73,7 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let from = tree
         .display_path(&source.uuid)
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("/{}", source.visible_name));
+        .map_or_else(|| format!("/{}", source.visible_name), str::to_string);
 
     if source.parent == new_parent && !source.deleted {
         return Ok(MvOutput {
@@ -144,8 +143,7 @@ fn resolve_destination(tree: &DocumentTree, dest: &str) -> anyhow::Result<(Paren
             }
             let path = tree
                 .display_path(&e.uuid)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("/{}", e.visible_name));
+                .map_or_else(|| format!("/{}", e.visible_name), str::to_string);
             Ok((Parent::Folder(e.uuid), path))
         }
     }

@@ -2019,7 +2019,9 @@ dependencies = [
 name = "remarkable-rm-parser"
 version = "0.1.0"
 dependencies = [
+ "byteorder",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

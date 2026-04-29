@@ -429,7 +429,7 @@ mod tests {
         let cli_err = err.downcast_ref::<MetadataError>().unwrap();
         match cli_err {
             MetadataError::NotFound(msg) => assert!(msg.contains("Nonexistent")),
-            _ => panic!("expected NotFound, got {cli_err:?}"),
+            MetadataError::InvalidPath(_) => panic!("expected NotFound, got {cli_err:?}"),
         }
     }
 
