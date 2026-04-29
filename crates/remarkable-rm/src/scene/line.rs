@@ -234,7 +234,7 @@ mod tests {
 
     /// Build the value-sub-block content for a Line (without the leading
     /// `item_type` byte — the caller has already consumed that).
-    fn line_bytes(current_version: u8, with_move_id: bool, points_bytes: &[u8]) -> Vec<u8> {
+    fn line_bytes(with_move_id: bool, points_bytes: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
         // tag 1, Byte4: tool = Fineliner v1 (4)
         bytes.extend_from_slice(&[0x14]);
@@ -259,7 +259,6 @@ mod tests {
             // tag 7, Id: move_id = (1, 2)
             bytes.extend_from_slice(&[0x7F, 0x01, 0x02]);
         }
-        let _ = current_version;
         bytes
     }
 
@@ -279,7 +278,7 @@ mod tests {
             points.push(direction);
             points.push(pressure);
         }
-        let bytes = line_bytes(2, false, &points);
+        let bytes = line_bytes(false, &points);
         let mut r = Reader::new(&bytes);
         let line = read_line(&mut r, 2).unwrap();
         assert_eq!(line.tool, Pen::FinelinerV1);
@@ -303,7 +302,7 @@ mod tests {
         points.extend_from_slice(&std::f32::consts::PI.to_le_bytes());
         points.extend_from_slice(&2.0_f32.to_le_bytes());
         points.extend_from_slice(&1.0_f32.to_le_bytes());
-        let bytes = line_bytes(1, false, &points);
+        let bytes = line_bytes(false, &points);
         let mut r = Reader::new(&bytes);
         let line = read_line(&mut r, 1).unwrap();
         assert_eq!(line.points.len(), 1);
@@ -321,7 +320,7 @@ mod tests {
         points.extend_from_slice(&0.0_f32.to_le_bytes());
         points.extend_from_slice(&0.0_f32.to_le_bytes());
         points.extend_from_slice(&[0u8; 6]); // speed, width, direction, pressure
-        let bytes = line_bytes(2, true, &points);
+        let bytes = line_bytes(true, &points);
         let mut r = Reader::new(&bytes);
         let line = read_line(&mut r, 2).unwrap();
         assert_eq!(line.move_id, Some(CrdtId { author: 1, seq: 2 }));

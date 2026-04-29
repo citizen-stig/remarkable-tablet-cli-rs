@@ -170,11 +170,7 @@ fn read_paragraph_format(body: &mut Reader<'_>) -> Result<ParagraphFormat, Parse
     let char_id = body.read_crdt_id()?;
     let timestamp = body.read_id(1)?;
     let mut sub = body.read_subblock(2)?;
-    let prefix = sub.read_u8()?;
-    if prefix != 0x11 {
-        return Err(ParseError::InvalidBlock("paragraph format prefix is not 0x11"));
-    }
-    let style = ParagraphStyle::from_u8(sub.read_u8()?)?;
+    let style = ParagraphStyle::from_u8(sub.read_byte(1)?)?;
     Ok(ParagraphFormat {
         char_id,
         timestamp,

@@ -7,7 +7,7 @@
 //! The wire format is documented in `RM_FORMAT_V6_SPEC.md` at the workspace
 //! root. The implementation matches that document section-by-section.
 //!
-//! Phase status: type skeleton in place; parsing bodies are Phase 4 step 10.
+//! Phase status: v6 parser implemented; PNG rendering is Phase 4 step 11.
 
 pub mod blocks;
 pub mod crdt;

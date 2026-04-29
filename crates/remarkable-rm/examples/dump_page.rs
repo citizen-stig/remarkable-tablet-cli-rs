@@ -33,8 +33,8 @@ fn main() -> ExitCode {
     println!("text: {}", if page.text.is_some() { "yes" } else { "no" });
     println!("layers: {}", page.layers.len());
 
-    let mut pen_counts: BTreeMap<&'static str, u32> = BTreeMap::new();
-    let mut color_counts: BTreeMap<&'static str, u32> = BTreeMap::new();
+    let mut pen_counts: BTreeMap<Pen, u32> = BTreeMap::new();
+    let mut color_counts: BTreeMap<PenColor, u32> = BTreeMap::new();
     let mut total_lines = 0usize;
     let mut total_points = 0usize;
 
@@ -49,8 +49,8 @@ fn main() -> ExitCode {
         total_lines += layer.lines.len();
         for line in &layer.lines {
             total_points += line.points.len();
-            *pen_counts.entry(pen_name(line.tool)).or_default() += 1;
-            *color_counts.entry(color_name(line.color)).or_default() += 1;
+            *pen_counts.entry(line.tool).or_default() += 1;
+            *color_counts.entry(line.color).or_default() += 1;
         }
     }
     println!("total lines: {total_lines}");
@@ -59,46 +59,4 @@ fn main() -> ExitCode {
     println!("colors: {color_counts:?}");
 
     ExitCode::SUCCESS
-}
-
-fn pen_name(p: Pen) -> &'static str {
-    match p {
-        Pen::PaintbrushV1 => "PaintbrushV1",
-        Pen::PencilV1 => "PencilV1",
-        Pen::BallpointV1 => "BallpointV1",
-        Pen::MarkerV1 => "MarkerV1",
-        Pen::FinelinerV1 => "FinelinerV1",
-        Pen::HighlighterV1 => "HighlighterV1",
-        Pen::Eraser => "Eraser",
-        Pen::MechanicalPencilV1 => "MechanicalPencilV1",
-        Pen::EraserAreaSelect => "EraserAreaSelect",
-        Pen::PaintbrushV2 => "PaintbrushV2",
-        Pen::MechanicalPencilV2 => "MechanicalPencilV2",
-        Pen::PencilV2 => "PencilV2",
-        Pen::BallpointV2 => "BallpointV2",
-        Pen::MarkerV2 => "MarkerV2",
-        Pen::FinelinerV2 => "FinelinerV2",
-        Pen::HighlighterV2 => "HighlighterV2",
-        Pen::Calligraphy => "Calligraphy",
-        Pen::Shader => "Shader",
-    }
-}
-
-fn color_name(c: PenColor) -> &'static str {
-    match c {
-        PenColor::Black => "Black",
-        PenColor::Gray => "Gray",
-        PenColor::White => "White",
-        PenColor::Yellow => "Yellow",
-        PenColor::Green => "Green",
-        PenColor::Pink => "Pink",
-        PenColor::Blue => "Blue",
-        PenColor::Red => "Red",
-        PenColor::GrayOverlap => "GrayOverlap",
-        PenColor::Highlight => "Highlight",
-        PenColor::GreenV2 => "GreenV2",
-        PenColor::Cyan => "Cyan",
-        PenColor::Magenta => "Magenta",
-        PenColor::YellowV2 => "YellowV2",
-    }
 }

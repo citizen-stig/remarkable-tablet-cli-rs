@@ -115,7 +115,7 @@ impl Intermediate {
             paper_size,
         } = self;
 
-        let node_props: HashMap<CrdtId, (String, bool)> = nodes
+        let mut node_props: HashMap<CrdtId, (String, bool)> = nodes
             .into_iter()
             .map(|n| (n.node_id, (n.label, n.visible)))
             .collect();
@@ -125,10 +125,7 @@ impl Intermediate {
             lines_by_parent.entry(lr.parent_id).or_default().push(lr.line);
         }
 
-        // Process SceneTreeBlocks in insertion order, deduplicating by
-        // `tree_id` (later `is_update` blocks already overrode parent fields
-        // since we assigned in the original loop, but for layer detection we
-        // only need first-occurrence order).
+        // Layers appear in the order their tree_id is first seen.
         let mut layers = Vec::new();
         let mut seen: HashSet<CrdtId> = HashSet::new();
         for tree in trees {
@@ -140,8 +137,7 @@ impl Intermediate {
             }
             let id = tree.tree_id;
             let (name, visible) = node_props
-                .get(&id)
-                .cloned()
+                .remove(&id)
                 .unwrap_or_else(|| (String::new(), true));
             let layer_lines = lines_by_parent.remove(&id).unwrap_or_default();
             layers.push(Layer {

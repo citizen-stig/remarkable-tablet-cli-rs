@@ -46,7 +46,6 @@ pub fn read_scene_item<'a, V>(
         let mut sub = body.read_subblock(6)?;
         let item_type = sub.read_u8()?;
         if item_type != expected_item_type as u8 {
-            // TODO: Add actual vs expected into error
             return Err(ParseError::InvalidBlock("scene item type mismatch"));
         }
         Some(parse_value(&mut sub)?)
