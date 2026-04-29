@@ -8,9 +8,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow};
 
-use remarkable_metadata::metadata::{self, DocumentEntry};
+use remarkable_metadata::metadata::{self, DocumentEntry, RawContent};
 use remarkable_metadata::page_range::PageSelection;
 use remarkable_tablet::connection::TabletConnection;
 
@@ -69,29 +69,21 @@ pub async fn list_selected_pages<C: TabletConnection>(
         .map(|e| e.name)
         .collect();
 
-    let ordered = match pages {
-        Some(_) => order_page_files_strict(
+    let selected = match pages {
+        Some(selection) => select_page_files_strict(
             content_bytes.as_deref().ok_or_else(|| {
                 anyhow!(
                     "readable notebook page order required from {content_path} when using --pages"
                 )
             })?,
             &mut page_files,
+            selection,
         )?,
-        None => order_page_files_best_effort(content_bytes.as_deref(), &mut page_files),
+        None => enumerate_page_files(order_page_files_best_effort(
+            content_bytes.as_deref(),
+            &mut page_files,
+        )),
     };
-
-    let selected = ordered
-        .into_iter()
-        .enumerate()
-        .filter_map(|(idx, name)| {
-            let one_based = u32::try_from(idx + 1).ok()?;
-            match pages {
-                Some(sel) if !sel.contains(one_based) => None,
-                _ => Some((one_based, name)),
-            }
-        })
-        .collect();
 
     Ok(selected)
 }
@@ -115,10 +107,8 @@ pub fn order_page_files_strict(
     content_bytes: &[u8],
     discovered: &mut Vec<String>,
 ) -> anyhow::Result<Vec<String>> {
-    let content = metadata::parse_content(content_bytes).context("parse notebook .content")?;
-    let Some(pages) = content.pages.as_deref() else {
-        bail!("notebook .content is missing a pages array; --pages requires recorded page order");
-    };
+    let content = parse_strict_content(content_bytes)?;
+    let pages = require_pages_array(&content)?;
     Ok(order_page_files_from_pages(Some(pages), discovered))
 }
 
@@ -150,6 +140,72 @@ pub fn order_page_files_from_pages(
     leftover.sort();
     ordered.extend(leftover);
     ordered
+}
+
+fn select_page_files_strict(
+    content_bytes: &[u8],
+    discovered: &mut Vec<String>,
+    selection: &PageSelection,
+) -> anyhow::Result<Vec<(u32, String)>> {
+    let content = parse_strict_content(content_bytes)?;
+    let pages = require_pages_array(&content)?;
+    Ok(select_page_files_from_pages(pages, discovered)
+        .into_iter()
+        .filter(|(page_number, _)| selection.contains(*page_number))
+        .collect())
+}
+
+fn select_page_files_from_pages(
+    pages: &[serde_json::Value],
+    discovered: &mut Vec<String>,
+) -> Vec<(u32, String)> {
+    discovered.sort();
+
+    let mut ordered = Vec::with_capacity(discovered.len());
+    let mut remaining: HashSet<String> = discovered.drain(..).collect();
+    for (idx, item) in pages.iter().enumerate() {
+        let Some(page_number) = one_based_page_number(idx) else {
+            continue;
+        };
+        let Some(page_id) = extract_page_id(item) else {
+            continue;
+        };
+        let filename = format!("{page_id}.rm");
+        if remaining.remove(&filename) {
+            ordered.push((page_number, filename));
+        }
+    }
+
+    let mut leftover: Vec<String> = remaining.into_iter().collect();
+    leftover.sort();
+    let offset = pages.len();
+    ordered.extend(leftover.into_iter().enumerate().filter_map(|(idx, name)| {
+        let page_number = one_based_page_number(offset + idx)?;
+        Some((page_number, name))
+    }));
+    ordered
+}
+
+fn enumerate_page_files(ordered: Vec<String>) -> Vec<(u32, String)> {
+    ordered
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, name)| Some((one_based_page_number(idx)?, name)))
+        .collect()
+}
+
+fn parse_strict_content(content_bytes: &[u8]) -> anyhow::Result<RawContent> {
+    metadata::parse_content(content_bytes).context("parse notebook .content")
+}
+
+fn require_pages_array(content: &RawContent) -> anyhow::Result<&[serde_json::Value]> {
+    content.pages.as_deref().ok_or_else(|| {
+        anyhow!("notebook .content is missing a pages array; --pages requires recorded page order")
+    })
+}
+
+fn one_based_page_number(index: usize) -> Option<u32> {
+    u32::try_from(index + 1).ok()
 }
 
 pub fn extract_page_id(item: &serde_json::Value) -> Option<&str> {

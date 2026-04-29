@@ -129,14 +129,14 @@ pub async fn run_with_conn<C: TabletConnection>(
             .read_file(&remote)
             .await
             .with_context(|| format!("read {remote}"))?;
-        let page = parse_page(&bytes)
-            .with_context(|| format!("parse {remote}"))?;
+        let page = parse_page(&bytes).with_context(|| format!("parse {remote}"))?;
         let opts = RenderOptions {
             width: args.width,
-            height: page.paper_size.map_or(remarkable_rm::DEFAULT_HEIGHT, |(_, h)| h),
+            height: page
+                .paper_size
+                .map_or(remarkable_rm::DEFAULT_HEIGHT, |(_, h)| h),
         };
-        let png = render_page(&page, &opts)
-            .with_context(|| format!("render {remote}"))?;
+        let png = render_page(&page, &opts).with_context(|| format!("render {remote}"))?;
         let output_path = output_dir.join(format!("{}_page_{page_index}.png", entry.uuid));
         tokio::fs::write(&output_path, &png)
             .await
@@ -313,4 +313,3 @@ fn into_remote_metadata(meta: &std::fs::Metadata) -> RemoteMetadata {
         kind,
     }
 }
-

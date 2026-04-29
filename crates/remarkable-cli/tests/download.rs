@@ -16,9 +16,13 @@ const FOLDER_UUID: &str = "aaaaaaaa-1111-1111-1111-111111111111";
 const DOC_PDF_UUID: &str = "bbbbbbbb-1111-1111-1111-111111111111";
 const DOC_EPUB_UUID: &str = "bbbbbbbb-2222-2222-2222-222222222222";
 const NOTEBOOK_UUID: &str = "cccccccc-1111-1111-1111-111111111111";
+const NOTEBOOK_GAPPED_UUID: &str = "cccccccc-2222-2222-2222-222222222222";
 const PAGE_UUID_1: &str = "11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const PAGE_UUID_2: &str = "22222222-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const PAGE_UUID_3: &str = "33333333-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const GAPPED_PAGE_UUID_1: &str = "44444444-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const GAPPED_PAGE_UUID_2: &str = "55555555-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const GAPPED_PAGE_UUID_3: &str = "66666666-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const NOTEBOOK_NAMED_SLASH_UUID: &str = "dddddddd-1111-1111-1111-111111111111";
 const EMPTY_NOTEBOOK_UUID: &str = "eeeeeeee-1111-1111-1111-111111111111";
 const NOTEBOOK_MISSING_DIR_UUID: &str = "ffffffff-1111-1111-1111-111111111111";
@@ -83,6 +87,27 @@ fn populate(conn: &FakeConnection) {
     conn.set_file(
         &format!("{DATA_DIR}/{NOTEBOOK_UUID}/{PAGE_UUID_3}.rm"),
         b"page3andmorebytes",
+    );
+
+    // Notebook whose middle page is listed in `.content` but missing on disk.
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_GAPPED_UUID}.metadata"),
+        br#"{"visibleName":"Gapped Sketches","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710800000000,"metadatamodified":1710800000000,"version":1}"#,
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_GAPPED_UUID}.content"),
+        format!(
+            r#"{{"fileType":"notebook","pages":[{{"id":"{GAPPED_PAGE_UUID_1}"}},{{"id":"{GAPPED_PAGE_UUID_2}"}},{{"id":"{GAPPED_PAGE_UUID_3}"}}]}}"#
+        )
+        .as_bytes(),
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_GAPPED_UUID}/{GAPPED_PAGE_UUID_1}.rm"),
+        b"gapped-page-1",
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_GAPPED_UUID}/{GAPPED_PAGE_UUID_3}.rm"),
+        b"gapped-page-3",
     );
 
     // Notebook whose visible name contains a `/` (sanitization edge case).
@@ -232,6 +257,27 @@ async fn download_notebook_with_pages_filter() {
     assert!(out_dir.join(format!("{PAGE_UUID_1}.rm")).exists());
     assert!(!out_dir.join(format!("{PAGE_UUID_2}.rm")).exists());
     assert!(out_dir.join(format!("{PAGE_UUID_3}.rm")).exists());
+}
+
+#[tokio::test]
+async fn download_pages_filter_does_not_renumber_after_missing_files() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    let tree = build_tree(&conn).await;
+    let dest_dir = tempfile::tempdir().unwrap();
+    let out_dir = dest_dir.path().join("gapped");
+
+    let out = download::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &args(NOTEBOOK_GAPPED_UUID, Some(out_dir.clone()), Some("2")),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out.pages_written, Some(0));
+    assert!(std::fs::read_dir(&out_dir).unwrap().next().is_none());
 }
 
 #[tokio::test]

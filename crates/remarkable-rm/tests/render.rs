@@ -5,9 +5,7 @@
 //! invariants: PNG round-trips through `tiny-skia`, dimensions match,
 //! and stroke pixels actually appear on the canvas.
 
-use remarkable_rm::{
-    DEFAULT_HEIGHT, DEFAULT_WIDTH, RenderOptions, parse_page, render_page,
-};
+use remarkable_rm::{DEFAULT_HEIGHT, DEFAULT_WIDTH, RenderOptions, parse_page, render_page};
 use tiny_skia::Pixmap;
 
 const SMOKE: &[u8] = include_bytes!("fixtures/smoke.rm");

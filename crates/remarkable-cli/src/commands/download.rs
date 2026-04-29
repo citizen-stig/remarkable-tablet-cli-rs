@@ -131,7 +131,10 @@ async fn download_source_file<C: TabletConnection>(
     let remote = format!("{data_dir}/{}.{ext}", entry.uuid);
     let output_path = match explicit_output {
         Some(p) => p.to_path_buf(),
-        None => PathBuf::from(format!("{}.{ext}", common::sanitize_name(&entry.visible_name))),
+        None => PathBuf::from(format!(
+            "{}.{ext}",
+            common::sanitize_name(&entry.visible_name)
+        )),
     };
     common::refuse_existing(&output_path)?;
 

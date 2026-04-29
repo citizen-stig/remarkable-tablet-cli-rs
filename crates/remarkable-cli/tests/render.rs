@@ -24,10 +24,14 @@ use remarkable_tablet::tablet::load_all_metadata;
 const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
 
 const NOTEBOOK_UUID: &str = "cccccccc-1111-1111-1111-111111111111";
+const NOTEBOOK_GAPPED_UUID: &str = "cccccccc-2222-2222-2222-222222222222";
 const PDF_UUID: &str = "bbbbbbbb-1111-1111-1111-111111111111";
 const PAGE_UUID_1: &str = "11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const PAGE_UUID_2: &str = "22222222-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const PAGE_UUID_3: &str = "33333333-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const GAPPED_PAGE_UUID_1: &str = "44444444-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const GAPPED_PAGE_UUID_2: &str = "55555555-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const GAPPED_PAGE_UUID_3: &str = "66666666-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
 const SMOKE_RM: &[u8] = include_bytes!("../../remarkable-rm/tests/fixtures/smoke.rm");
 const PENS_SMALL_RM: &[u8] = include_bytes!("../../remarkable-rm/tests/fixtures/pens-small.rm");
@@ -58,6 +62,27 @@ fn populate(conn: &FakeConnection) {
     );
     conn.set_file(
         &format!("{DATA_DIR}/{NOTEBOOK_UUID}/{PAGE_UUID_3}.rm"),
+        LAYERS_RM,
+    );
+
+    // Notebook whose middle page is listed in `.content` but missing on disk.
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_GAPPED_UUID}.metadata"),
+        br#"{"visibleName":"Gapped Sketches","type":"DocumentType","parent":"","deleted":false,"pinned":false,"lastModified":1710800000000,"metadatamodified":1710800000000,"version":1}"#,
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_GAPPED_UUID}.content"),
+        format!(
+            r#"{{"fileType":"notebook","pages":[{{"id":"{GAPPED_PAGE_UUID_1}"}},{{"id":"{GAPPED_PAGE_UUID_2}"}},{{"id":"{GAPPED_PAGE_UUID_3}"}}]}}"#
+        )
+        .as_bytes(),
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_GAPPED_UUID}/{GAPPED_PAGE_UUID_1}.rm"),
+        SMOKE_RM,
+    );
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_GAPPED_UUID}/{GAPPED_PAGE_UUID_3}.rm"),
         LAYERS_RM,
     );
 
@@ -228,9 +253,40 @@ async fn render_custom_width_is_honoured() {
     let mut a = args(NOTEBOOK_UUID, Some(out_dir.clone()), Some("1"), None);
     a.width = 702;
 
-    let out = render::run_with_conn(&conn, DATA_DIR, &tree, &a).await.unwrap();
+    let out = render::run_with_conn(&conn, DATA_DIR, &tree, &a)
+        .await
+        .unwrap();
     assert_eq!(out.pages.len(), 1);
     assert_eq!(out.width, 702);
+}
+
+#[tokio::test]
+async fn render_pages_filter_preserves_recorded_page_numbers_when_files_are_missing() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    let tree = build_tree(&conn).await;
+    let dest = tempfile::tempdir().unwrap();
+    let out_dir = dest.path().join("gapped");
+
+    let out = render::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &args(NOTEBOOK_GAPPED_UUID, Some(out_dir.clone()), Some("3"), None),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out.pages.len(), 1);
+    assert_eq!(out.pages[0].page, 3);
+    let expected_path = out_dir.join(format!("{NOTEBOOK_GAPPED_UUID}_page_3.png"));
+    assert_eq!(out.pages[0].output_path, expected_path);
+    assert_png(&out.pages[0].output_path);
+    assert!(
+        !out_dir
+            .join(format!("{NOTEBOOK_GAPPED_UUID}_page_2.png"))
+            .exists()
+    );
 }
 
 #[tokio::test]
@@ -291,12 +347,9 @@ async fn render_from_backup_accepts_root_pointing_to_xochitl_directly() {
 
     let dest = tempfile::tempdir().unwrap();
     let out_dir = dest.path().join("sketches");
-    let out = render::run_from_backup(
-        xochitl,
-        &args(NOTEBOOK_UUID, Some(out_dir), None, None),
-    )
-    .await
-    .unwrap();
+    let out = render::run_from_backup(xochitl, &args(NOTEBOOK_UUID, Some(out_dir), None, None))
+        .await
+        .unwrap();
     assert_eq!(out.pages.len(), 1);
     assert_png(&out.pages[0].output_path);
 }

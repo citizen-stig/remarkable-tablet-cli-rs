@@ -73,11 +73,7 @@ pub fn render_page(page: &Page, opts: &RenderOptions) -> Result<Vec<u8>, RenderE
     })?;
     pixmap.fill(Color::WHITE);
 
-    // reMarkable's stroke coordinates use a top-center origin: x = 0 is the
-    // page midline, y = 0 is the top edge. Apply a single tiny-skia
-    // transform so the math doesn't leak into per-point arithmetic.
-    #[allow(clippy::cast_precision_loss)]
-    let transform = Transform::from_translate(opts.width as f32 / 2.0, 0.0);
+    let transform = page_to_canvas_transform(page, opts);
 
     for layer in &page.layers {
         if !layer.visible {
@@ -89,6 +85,18 @@ pub fn render_page(page: &Page, opts: &RenderOptions) -> Result<Vec<u8>, RenderE
     pixmap
         .encode_png()
         .map_err(|e| RenderError::Encode(e.to_string()))
+}
+
+/// reMarkable stroke coordinates use a top-center origin: x = 0 is the page
+/// midline, y = 0 is the top edge. Map that native page space onto the
+/// requested output canvas with one tiny-skia transform so geometry and
+/// effective stroke widths scale together.
+#[allow(clippy::cast_precision_loss)]
+fn page_to_canvas_transform(page: &Page, opts: &RenderOptions) -> Transform {
+    let source = RenderOptions::for_page(page);
+    let scale_x = opts.width as f32 / source.width as f32;
+    let scale_y = opts.height as f32 / source.height as f32;
+    Transform::from_row(scale_x, 0.0, 0.0, scale_y, opts.width as f32 / 2.0, 0.0)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -220,6 +228,36 @@ mod tests {
         }
     }
 
+    fn page_with_lines(lines: Vec<Line>, paper_size: Option<(u32, u32)>) -> Page {
+        Page {
+            layers: vec![Layer {
+                node_id: CrdtId { author: 1, seq: 2 },
+                name: "L1".into(),
+                visible: true,
+                lines,
+            }],
+            text: None,
+            paper_size,
+        }
+    }
+
+    fn count_non_white_pixels_in_columns(pixmap: &Pixmap, start_x: u32, end_x: u32) -> usize {
+        let width = usize::try_from(pixmap.width()).unwrap();
+        let start_x = usize::try_from(start_x).unwrap();
+        let end_x = usize::try_from(end_x).unwrap();
+
+        pixmap
+            .pixels()
+            .iter()
+            .enumerate()
+            .filter(|(idx, pixel)| {
+                let x = idx % width;
+                (start_x..end_x).contains(&x)
+                    && (pixel.red() != 0xFF || pixel.green() != 0xFF || pixel.blue() != 0xFF)
+            })
+            .count()
+    }
+
     #[test]
     fn empty_page_renders_white_canvas() {
         let page = Page::default();
@@ -243,16 +281,7 @@ mod tests {
             PenColor::Black,
             Pen::FinelinerV2,
         );
-        let page = Page {
-            layers: vec![Layer {
-                node_id: CrdtId { author: 1, seq: 2 },
-                name: "L1".into(),
-                visible: true,
-                lines: vec![line],
-            }],
-            text: None,
-            paper_size: None,
-        };
+        let page = page_with_lines(vec![line], None);
         let png = render_page(&page, &RenderOptions::default()).unwrap();
         let decoded = Pixmap::decode_png(&png).unwrap();
         let dark_pixel_count = decoded
@@ -296,16 +325,7 @@ mod tests {
             PenColor::Black,
             Pen::Eraser,
         );
-        let page = Page {
-            layers: vec![Layer {
-                node_id: CrdtId { author: 1, seq: 2 },
-                name: "L1".into(),
-                visible: true,
-                lines: vec![line],
-            }],
-            text: None,
-            paper_size: None,
-        };
+        let page = page_with_lines(vec![line], None);
         let png = render_page(&page, &RenderOptions::default()).unwrap();
         let decoded = Pixmap::decode_png(&png).unwrap();
         let any_ink = decoded
@@ -330,5 +350,71 @@ mod tests {
         let page = Page::default();
         let opts = RenderOptions::for_page(&page);
         assert_eq!((opts.width, opts.height), (DEFAULT_WIDTH, DEFAULT_HEIGHT));
+    }
+
+    #[test]
+    fn explicit_output_size_scales_strokes_into_requested_canvas() {
+        let left = line_with_points(
+            vec![point(-650.0, 120.0), point(-650.0, 900.0)],
+            PenColor::Black,
+            Pen::FinelinerV2,
+        );
+        let right = line_with_points(
+            vec![point(650.0, 120.0), point(650.0, 900.0)],
+            PenColor::Black,
+            Pen::FinelinerV2,
+        );
+        let page = page_with_lines(vec![left, right], None);
+        let png = render_page(
+            &page,
+            &RenderOptions {
+                width: 702,
+                height: 936,
+            },
+        )
+        .unwrap();
+        let decoded = Pixmap::decode_png(&png).unwrap();
+
+        assert!(
+            count_non_white_pixels_in_columns(&decoded, 0, 60) > 50,
+            "expected ink near the left edge after scaling"
+        );
+        assert!(
+            count_non_white_pixels_in_columns(&decoded, 642, 702) > 50,
+            "expected ink near the right edge after scaling"
+        );
+    }
+
+    #[test]
+    fn scaling_uses_page_paper_size_instead_of_default_width() {
+        let left = line_with_points(
+            vec![point(-350.0, 60.0), point(-350.0, 540.0)],
+            PenColor::Black,
+            Pen::FinelinerV2,
+        );
+        let right = line_with_points(
+            vec![point(350.0, 60.0), point(350.0, 540.0)],
+            PenColor::Black,
+            Pen::FinelinerV2,
+        );
+        let page = page_with_lines(vec![left, right], Some((800, 600)));
+        let png = render_page(
+            &page,
+            &RenderOptions {
+                width: 400,
+                height: 300,
+            },
+        )
+        .unwrap();
+        let decoded = Pixmap::decode_png(&png).unwrap();
+
+        assert!(
+            count_non_white_pixels_in_columns(&decoded, 0, 40) > 20,
+            "expected ink near the left edge when scaling from paper_size width"
+        );
+        assert!(
+            count_non_white_pixels_in_columns(&decoded, 360, 400) > 20,
+            "expected ink near the right edge when scaling from paper_size width"
+        );
     }
 }
