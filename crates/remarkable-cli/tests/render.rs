@@ -230,7 +230,7 @@ async fn render_custom_width_is_honoured() {
 
     let out = render::run_with_conn(&conn, DATA_DIR, &tree, &a).await.unwrap();
     assert_eq!(out.pages.len(), 1);
-    assert_eq!(out.pages[0].width, 702);
+    assert_eq!(out.width, 702);
 }
 
 #[tokio::test]

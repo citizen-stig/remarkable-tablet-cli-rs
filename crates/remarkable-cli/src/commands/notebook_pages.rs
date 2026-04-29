@@ -1,24 +1,100 @@
 //! Shared helpers for enumerating a notebook's `.rm` page files.
 //!
-//! Both `download` and `render` need to:
-//! 1. List the `<uuid>/` directory on the source.
-//! 2. Read `<uuid>.content` to recover the user-visible page order.
-//! 3. Optionally apply a 1-indexed `--pages` selection.
-//!
-//! The helpers here keep that logic in one place. `order_page_files_*`
-//! mutate their `discovered` argument (sorting it) so callers don't pay
-//! for an extra clone — the same shape `download.rs` already used before
-//! the split.
-//!
-//! The page-source-side I/O (SFTP for the tablet vs local fs for a
-//! backup) stays with each command; only the pure ordering logic lives
-//! here.
+//! `list_selected_pages` runs the full pipeline (list `<uuid>/`, read
+//! `<uuid>.content`, optionally apply a 1-indexed `--pages` selection)
+//! against any [`TabletConnection`]. The lower-level `order_page_files_*`
+//! functions are exposed for callers that only need the ordering step.
 
 use std::collections::HashSet;
+use std::path::Path;
 
-use anyhow::{Context, bail};
+use anyhow::{Context, anyhow, bail};
 
-use remarkable_metadata::metadata;
+use remarkable_metadata::metadata::{self, DocumentEntry};
+use remarkable_metadata::page_range::PageSelection;
+use remarkable_tablet::connection::TabletConnection;
+
+/// Resolve the page files for a notebook, applying the user's `--pages`
+/// selection if any. The returned list is `(1-based page index,
+/// filename)` pairs in render order; `pages = None` returns every page.
+///
+/// # Errors
+/// Returns an error if `--pages` is set but `.content` is unreadable, if
+/// the page directory is unreadable for any reason other than "doesn't
+/// exist on a zero-page notebook", or if `.content` parsing fails.
+pub async fn list_selected_pages<C: TabletConnection>(
+    conn: &C,
+    data_dir: &str,
+    entry: &DocumentEntry,
+    pages: Option<&PageSelection>,
+) -> anyhow::Result<Vec<(u32, String)>> {
+    let pages_dir = format!("{data_dir}/{}", entry.uuid);
+    let content_path = format!("{data_dir}/{}.content", entry.uuid);
+
+    // Page-dir listing and `.content` are independent reads; running them
+    // concurrently saves one round-trip on a slow tablet link.
+    let (entries_res, content_res) =
+        tokio::join!(conn.read_dir(&pages_dir), conn.read_file(&content_path));
+    let content_bytes = match content_res {
+        Ok(bytes) => Some(bytes),
+        Err(err) if pages.is_some() => {
+            return Err(err).with_context(|| {
+                format!(
+                    "readable notebook page order required from {content_path} when using --pages"
+                )
+            });
+        }
+        Err(_) => None,
+    };
+    let entries = match entries_res {
+        Ok(entries) => entries,
+        Err(err) => {
+            if can_treat_missing_page_dir_as_empty(conn, &pages_dir, content_bytes.as_deref())
+                .await?
+            {
+                Vec::new()
+            } else {
+                return Err(err).with_context(|| format!("list {pages_dir}"));
+            }
+        }
+    };
+
+    let mut page_files: Vec<String> = entries
+        .into_iter()
+        .filter(|e| {
+            Path::new(&e.name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rm"))
+        })
+        .map(|e| e.name)
+        .collect();
+
+    let ordered = match pages {
+        Some(_) => order_page_files_strict(
+            content_bytes.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "readable notebook page order required from {content_path} when using --pages"
+                )
+            })?,
+            &mut page_files,
+        )?,
+        None => order_page_files_best_effort(content_bytes.as_deref(), &mut page_files),
+    };
+
+    let selected = ordered
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, name)| {
+            let one_based = u32::try_from(idx + 1).ok()?;
+            match pages {
+                Some(sel) if !sel.contains(one_based) => None,
+                _ => Some((one_based, name)),
+            }
+        })
+        .collect();
+
+    Ok(selected)
+}
 
 /// Best-effort page ordering for full notebook downloads or renders: try
 /// to recover the order from `.content`, otherwise fall back to sorted
@@ -60,7 +136,7 @@ pub fn order_page_files_from_pages(
     };
 
     let mut ordered = Vec::with_capacity(discovered.len());
-    let mut remaining: HashSet<String> = discovered.iter().cloned().collect();
+    let mut remaining: HashSet<String> = discovered.drain(..).collect();
     for item in arr {
         let Some(page_id) = extract_page_id(item) else {
             continue;
@@ -89,8 +165,22 @@ pub fn extract_page_id(item: &serde_json::Value) -> Option<&str> {
 /// True when a missing page directory can be treated as an empty notebook
 /// — i.e. the `.content` file (if any) records zero pages. Used to keep
 /// the no-content-no-pages happy path from erroring out.
-#[must_use]
-pub fn page_count_zero(content_bytes: Option<&[u8]>) -> bool {
+async fn can_treat_missing_page_dir_as_empty<C: TabletConnection>(
+    conn: &C,
+    pages_dir: &str,
+    content_bytes: Option<&[u8]>,
+) -> anyhow::Result<bool> {
+    if conn
+        .file_exists(pages_dir)
+        .await
+        .with_context(|| format!("stat {pages_dir}"))?
+    {
+        return Ok(false);
+    }
+    Ok(page_count_zero(content_bytes))
+}
+
+fn page_count_zero(content_bytes: Option<&[u8]>) -> bool {
     let Some(bytes) = content_bytes else {
         return false;
     };

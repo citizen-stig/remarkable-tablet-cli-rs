@@ -12,15 +12,13 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, anyhow};
+use anyhow::Context;
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::cli::DownloadArgs;
 use crate::commands::common::{self, CommandContext};
-use crate::commands::notebook_pages::{
-    order_page_files_best_effort, order_page_files_strict, page_count_zero,
-};
+use crate::commands::notebook_pages;
 use crate::error::CliError;
 use crate::output::{self, OutputFormat};
 use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind};
@@ -133,9 +131,9 @@ async fn download_source_file<C: TabletConnection>(
     let remote = format!("{data_dir}/{}.{ext}", entry.uuid);
     let output_path = match explicit_output {
         Some(p) => p.to_path_buf(),
-        None => PathBuf::from(format!("{}.{ext}", sanitize_name(&entry.visible_name))),
+        None => PathBuf::from(format!("{}.{ext}", common::sanitize_name(&entry.visible_name))),
     };
-    refuse_existing(&output_path)?;
+    common::refuse_existing(&output_path)?;
 
     let written = transfer::download_file(conn, &remote, &output_path)
         .await
@@ -160,86 +158,20 @@ async fn download_notebook<C: TabletConnection>(
 ) -> anyhow::Result<DownloadOutput> {
     let output_dir = match explicit_output {
         Some(p) => p.to_path_buf(),
-        None => PathBuf::from(sanitize_name(&entry.visible_name)),
+        None => PathBuf::from(common::sanitize_name(&entry.visible_name)),
     };
-    refuse_existing(&output_dir)?;
+    common::refuse_existing(&output_dir)?;
 
-    let pages_dir = format!("{data_dir}/{}", entry.uuid);
-    let content_path = format!("{data_dir}/{}.content", entry.uuid);
-    // Page-dir listing and `.content` are independent SFTP reads; running
-    // them concurrently saves one round-trip on a slow tablet link. A
-    // missing page directory is only tolerated when the notebook's
-    // `.content` proves it has zero pages.
-    let (entries_res, content_res) =
-        tokio::join!(conn.read_dir(&pages_dir), conn.read_file(&content_path));
-    let content_bytes = match content_res {
-        Ok(bytes) => Some(bytes),
-        Err(err) if pages.is_some() => {
-            return Err(err).with_context(|| {
-                format!(
-                    "readable notebook page order required from {content_path} when using --pages"
-                )
-            });
-        }
-        Err(_) => None,
-    };
-    let entries = match entries_res {
-        Ok(entries) => entries,
-        Err(err) => {
-            if can_treat_missing_page_dir_as_empty(conn, &pages_dir, content_bytes.as_deref())
-                .await?
-            {
-                Vec::new()
-            } else {
-                return Err(err).with_context(|| format!("list {pages_dir}"));
-            }
-        }
-    };
-    let mut page_files: Vec<String> = entries
-        .into_iter()
-        .filter(|e| {
-            Path::new(&e.name)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("rm"))
-        })
-        .map(|e| e.name)
-        .collect();
-
-    let ordered = match pages {
-        Some(_) => order_page_files_strict(
-            content_bytes.as_deref().ok_or_else(|| {
-                anyhow!(
-                    "readable notebook page order required from {content_path} when using --pages"
-                )
-            })?,
-            &mut page_files,
-        )?,
-        None => order_page_files_best_effort(content_bytes.as_deref(), &mut page_files),
-    };
-
-    let selected: Vec<&str> = match pages {
-        Some(sel) => ordered
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, name)| {
-                let one_based = u32::try_from(idx + 1).ok()?;
-                if sel.contains(one_based) {
-                    Some(name.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect(),
-        None => ordered.iter().map(String::as_str).collect(),
-    };
+    let selected = notebook_pages::list_selected_pages(conn, data_dir, entry, pages).await?;
 
     tokio::fs::create_dir_all(&output_dir)
         .await
         .with_context(|| format!("create {}", output_dir.display()))?;
 
+    let pages_dir = format!("{data_dir}/{}", entry.uuid);
     let jobs: Vec<(String, PathBuf)> = selected
         .iter()
-        .map(|name| (format!("{pages_dir}/{name}"), output_dir.join(name)))
+        .map(|(_, name)| (format!("{pages_dir}/{name}"), output_dir.join(name)))
         .collect();
     let pages_count = jobs.len();
     let total_bytes = transfer::download_many(conn, jobs)
@@ -254,40 +186,6 @@ async fn download_notebook<C: TabletConnection>(
         size_bytes: total_bytes,
         pages_written: Some(pages_count),
     })
-}
-
-async fn can_treat_missing_page_dir_as_empty<C: TabletConnection>(
-    conn: &C,
-    pages_dir: &str,
-    content_bytes: Option<&[u8]>,
-) -> anyhow::Result<bool> {
-    if conn
-        .file_exists(pages_dir)
-        .await
-        .with_context(|| format!("stat {pages_dir}"))?
-    {
-        return Ok(false);
-    }
-    Ok(page_count_zero(content_bytes))
-}
-
-fn refuse_existing(path: &Path) -> anyhow::Result<()> {
-    if path.exists() {
-        return Err(CliError::AlreadyExists(format!(
-            "output path already exists: {}",
-            path.display()
-        ))
-        .into());
-    }
-    Ok(())
-}
-
-/// Replace path-unsafe characters in a `visibleName` so it can be used
-/// as a filename component. Currently just `/` since that's the only
-/// reMarkable-allowed character that breaks local paths; conservative
-/// callers can also pass `--output` to skip this entirely.
-fn sanitize_name(name: &str) -> String {
-    name.replace('/', "_")
 }
 
 fn print_output(out: &DownloadOutput, format: OutputFormat) {

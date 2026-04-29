@@ -1,14 +1,8 @@
 //! Rasterize a parsed [`Page`] to a PNG image.
 //!
-//! The renderer composites stroke layers only — PDF/ePub backgrounds are a
-//! Phase 5 concern. Pen colors map to a fixed palette (spec §7.3) and the
-//! highlighter color is alpha-blended at 0.25 so overlapping highlight
-//! strokes don't completely obscure underlying ink.
-//!
-//! Stroke width is taken from the median per-vertex `Point.width` scaled by
-//! `Line.thickness_scale`; per-vertex width modulation is a deliberate
-//! follow-up (segment-by-segment paths). The current single-width model is
-//! enough for legible page captures.
+//! Composites stroke layers only — no PDF/ePub backgrounds. Pen colors map
+//! to the fixed palette in spec §7.3; the highlighter is alpha-blended so
+//! overlapping highlight strokes don't fully obscure ink.
 
 use tiny_skia::{Color, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
@@ -19,9 +13,9 @@ use crate::scene::line::{Line, Pen, PenColor};
 pub const DEFAULT_WIDTH: u32 = 1404;
 pub const DEFAULT_HEIGHT: u32 = 1872;
 
-/// Highlighter alpha — matches `lines-are-rusty`. Anything higher visually
+/// Highlighter alpha (0x40 ≈ 0.25) — matches `lines-are-rusty`. Higher
 /// obscures underlying ink; lower stops reading as "highlight."
-const HIGHLIGHTER_ALPHA: f32 = 0.25;
+const HIGHLIGHTER_ALPHA_U8: u8 = 0x40;
 
 /// `Point.width` is the tablet's u16 stroke-width unit. The v1 parser
 /// (`scene::line::read_point_v1`) scales raw float pen widths by 4 before
@@ -189,8 +183,7 @@ fn pen_color_to_rgba(color: PenColor) -> Color {
         PenColor::Blue => Color::from_rgba8(0x14, 0x4F, 0xC4, 0xFF),
         PenColor::Red => Color::from_rgba8(0xCC, 0x33, 0x00, 0xFF),
         PenColor::GrayOverlap => Color::from_rgba8(0x60, 0x60, 0x60, 0xFF),
-        PenColor::Highlight => Color::from_rgba(1.0, 0.95, 0.0, HIGHLIGHTER_ALPHA)
-            .expect("highlight rgba is in range"),
+        PenColor::Highlight => Color::from_rgba8(0xFF, 0xF2, 0x00, HIGHLIGHTER_ALPHA_U8),
         PenColor::GreenV2 => Color::from_rgba8(0x35, 0xB5, 0x57, 0xFF),
         PenColor::Cyan => Color::from_rgba8(0x00, 0xB7, 0xC4, 0xFF),
         PenColor::Magenta => Color::from_rgba8(0xC4, 0x35, 0xB5, 0xFF),

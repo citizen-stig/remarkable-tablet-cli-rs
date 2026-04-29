@@ -1,30 +1,23 @@
 //! Implementation of `remarkable-cli render <path-or-uuid>`.
 //!
-//! Renders notebook pages to PNG. Two source modes:
-//! - **Tablet** (default): SSH/SFTP through the user's normal connection.
-//! - **Backup** (`--from-backup`): read straight from a local copy of the
-//!   xochitl tree, no network required.
-//!
-//! The two modes share path resolution, page selection, and the actual
-//! parse-and-rasterize loop. Only the `TabletConnection` impl differs —
-//! `BackupConnection` below is a thin local-fs adapter so the existing
-//! metadata loader and page-listing helpers light up unchanged.
+//! Renders notebook pages to PNG from either the tablet over SSH/SFTP or
+//! a local backup tree (`--from-backup`). Both modes share the
+//! parse-and-rasterize loop and differ only in their `TabletConnection`
+//! impl — `BackupConnection` is a local-fs adapter at the bottom of this
+//! file.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, bail};
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::cli::RenderArgs;
 use crate::commands::common::{self, CommandContext};
-use crate::commands::notebook_pages::{
-    order_page_files_best_effort, order_page_files_strict, page_count_zero,
-};
+use crate::commands::notebook_pages;
 use crate::error::CliError;
 use crate::output::{self, OutputFormat};
 use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind};
-use remarkable_metadata::page_range::PageSelection;
 use remarkable_metadata::path_resolver::{self, Resolved};
 use remarkable_metadata::tree::DocumentTree;
 use remarkable_rm::{RenderOptions, parse_page, render_page};
@@ -47,7 +40,6 @@ pub struct RenderOutput {
 pub struct RenderedPage {
     pub page: u32,
     pub output_path: PathBuf,
-    pub width: u32,
     pub height: u32,
 }
 
@@ -72,10 +64,8 @@ async fn run(ctx: &CommandContext, args: &RenderArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test-friendly entry for `--from-backup`. Builds the tree from local
-/// `.metadata` files under `<backup_root>/xochitl/` (or `<backup_root>`
-/// itself if it already points at the xochitl tree) and renders into the
-/// path the caller passed.
+/// Render against a local backup. Accepts either `<root>/xochitl/...`
+/// or a path that points at the `xochitl` tree directly.
 ///
 /// # Errors
 /// Returns an error if the directory layout doesn't match a backup,
@@ -95,8 +85,8 @@ pub async fn run_from_backup(
     run_with_conn(&conn, &data_dir, &tree, args).await
 }
 
-/// Test-friendly core: render a notebook against any
-/// [`TabletConnection`] and return what was written.
+/// Render a notebook against any [`TabletConnection`] and return what
+/// was written.
 ///
 /// # Errors
 /// Returns an error for unresolvable paths, non-notebook targets,
@@ -121,11 +111,12 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let output_dir = match args.output.as_deref() {
         Some(p) => p.to_path_buf(),
-        None => PathBuf::from(sanitize_name(&entry.visible_name)),
+        None => PathBuf::from(common::sanitize_name(&entry.visible_name)),
     };
-    refuse_existing(&output_dir)?;
+    common::refuse_existing(&output_dir)?;
 
-    let selected = list_selected_pages(conn, data_dir, entry, args.pages.as_ref()).await?;
+    let selected =
+        notebook_pages::list_selected_pages(conn, data_dir, entry, args.pages.as_ref()).await?;
 
     tokio::fs::create_dir_all(&output_dir)
         .await
@@ -154,7 +145,6 @@ pub async fn run_with_conn<C: TabletConnection>(
         rendered.push(RenderedPage {
             page: page_index,
             output_path,
-            width: opts.width,
             height: opts.height,
         });
     }
@@ -194,84 +184,6 @@ fn expect_notebook(entry: &DocumentEntry) -> anyhow::Result<()> {
     }
 }
 
-/// Return `(page_index, filename)` pairs for the pages the caller asked
-/// for. `page_index` is 1-indexed and matches the user's `--pages`
-/// numbering — preserving it through the loop keeps PNG filenames
-/// aligned with what the user typed.
-async fn list_selected_pages<C: TabletConnection>(
-    conn: &C,
-    data_dir: &str,
-    entry: &DocumentEntry,
-    pages: Option<&PageSelection>,
-) -> anyhow::Result<Vec<(u32, String)>> {
-    let pages_dir = format!("{data_dir}/{}", entry.uuid);
-    let content_path = format!("{data_dir}/{}.content", entry.uuid);
-    let (entries_res, content_res) =
-        tokio::join!(conn.read_dir(&pages_dir), conn.read_file(&content_path));
-    let content_bytes = match content_res {
-        Ok(bytes) => Some(bytes),
-        Err(err) if pages.is_some() => {
-            return Err(err).with_context(|| {
-                format!(
-                    "readable notebook page order required from {content_path} when using --pages"
-                )
-            });
-        }
-        Err(_) => None,
-    };
-    let entries = match entries_res {
-        Ok(entries) => entries,
-        Err(err) => {
-            if !conn
-                .file_exists(&pages_dir)
-                .await
-                .with_context(|| format!("stat {pages_dir}"))?
-                && page_count_zero(content_bytes.as_deref())
-            {
-                Vec::new()
-            } else {
-                return Err(err).with_context(|| format!("list {pages_dir}"));
-            }
-        }
-    };
-
-    let mut page_files: Vec<String> = entries
-        .into_iter()
-        .filter(|e| {
-            Path::new(&e.name)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("rm"))
-        })
-        .map(|e| e.name)
-        .collect();
-
-    let ordered = match pages {
-        Some(_) => order_page_files_strict(
-            content_bytes.as_deref().ok_or_else(|| {
-                anyhow!(
-                    "readable notebook page order required from {content_path} when using --pages"
-                )
-            })?,
-            &mut page_files,
-        )?,
-        None => order_page_files_best_effort(content_bytes.as_deref(), &mut page_files),
-    };
-
-    let selected: Vec<(u32, String)> = ordered
-        .into_iter()
-        .enumerate()
-        .filter_map(|(idx, name)| {
-            let one_based = u32::try_from(idx + 1).ok()?;
-            match pages {
-                Some(sel) if !sel.contains(one_based) => None,
-                _ => Some((one_based, name)),
-            }
-        })
-        .collect();
-
-    Ok(selected)
-}
-
 /// Find the `xochitl` directory inside a backup root. Accepts either
 /// `<root>` (containing `xochitl/`) or `<root>/xochitl` directly so users
 /// can point at whichever form their `backup` command produced.
@@ -290,21 +202,6 @@ fn locate_xochitl_root(root: &Path) -> anyhow::Result<PathBuf> {
         "expected a backup directory at {} (with optional `xochitl/` subdir)",
         root.display()
     )
-}
-
-fn refuse_existing(path: &Path) -> anyhow::Result<()> {
-    if path.exists() {
-        return Err(CliError::AlreadyExists(format!(
-            "output path already exists: {}",
-            path.display()
-        ))
-        .into());
-    }
-    Ok(())
-}
-
-fn sanitize_name(name: &str) -> String {
-    name.replace('/', "_")
 }
 
 fn print_output(out: &RenderOutput, format: OutputFormat) {
@@ -333,7 +230,7 @@ fn format_human(o: &RenderOutput) -> String {
             "  page {:>3}: {} ({}x{})",
             page.page,
             page.output_path.display(),
-            page.width,
+            o.width,
             page.height
         ));
     }
@@ -366,20 +263,9 @@ impl TabletConnection for BackupConnection {
         while let Some(entry) = rd.next_entry().await? {
             let name = entry.file_name().to_string_lossy().into_owned();
             let meta = entry.metadata().await?;
-            let kind = if meta.is_dir() {
-                RemoteFileKind::Dir
-            } else if meta.is_file() {
-                RemoteFileKind::File
-            } else {
-                RemoteFileKind::Other
-            };
             out.push(RemoteEntry {
                 name,
-                metadata: RemoteMetadata {
-                    size: Some(meta.len()),
-                    mtime: meta.modified().ok(),
-                    kind,
-                },
+                metadata: into_remote_metadata(&meta),
             });
         }
         Ok(out)
@@ -389,18 +275,7 @@ impl TabletConnection for BackupConnection {
         let meta = tokio::fs::metadata(path)
             .await
             .with_context(|| format!("stat {path}"))?;
-        let kind = if meta.is_dir() {
-            RemoteFileKind::Dir
-        } else if meta.is_file() {
-            RemoteFileKind::File
-        } else {
-            RemoteFileKind::Other
-        };
-        Ok(RemoteMetadata {
-            size: Some(meta.len()),
-            mtime: meta.modified().ok(),
-            kind,
-        })
+        Ok(into_remote_metadata(&meta))
     }
 
     async fn remove_file(&self, _path: &str) -> anyhow::Result<()> {
@@ -421,6 +296,21 @@ impl TabletConnection for BackupConnection {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err).with_context(|| format!("stat {path}")),
         }
+    }
+}
+
+fn into_remote_metadata(meta: &std::fs::Metadata) -> RemoteMetadata {
+    let kind = if meta.is_dir() {
+        RemoteFileKind::Dir
+    } else if meta.is_file() {
+        RemoteFileKind::File
+    } else {
+        RemoteFileKind::Other
+    };
+    RemoteMetadata {
+        size: Some(meta.len()),
+        mtime: meta.modified().ok(),
+        kind,
     }
 }
 

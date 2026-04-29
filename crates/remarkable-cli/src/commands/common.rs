@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -96,6 +97,30 @@ pub fn file_type_label(file_type: FileType) -> &'static str {
         FileType::Epub => "epub",
         FileType::Notebook => "notebook",
     }
+}
+
+/// Replace path-unsafe characters in a `visibleName` so it can be used as
+/// a filename component. Currently just `/` since that's the only
+/// reMarkable-allowed character that breaks local paths.
+#[must_use]
+pub fn sanitize_name(name: &str) -> String {
+    name.replace('/', "_")
+}
+
+/// Refuse to write into an existing path. Used by commands that produce a
+/// new file or directory and don't want to clobber the user's data.
+///
+/// # Errors
+/// Returns [`CliError::AlreadyExists`] if `path` exists.
+pub fn refuse_existing(path: &Path) -> anyhow::Result<()> {
+    if path.exists() {
+        return Err(CliError::AlreadyExists(format!(
+            "output path already exists: {}",
+            path.display()
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
