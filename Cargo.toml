@@ -2,7 +2,7 @@
 members = [
     "crates/remarkable-metadata",
     "crates/remarkable-tablet",
-    "crates/remarkable-rm-parser",
+    "crates/remarkable-rm",
     "crates/remarkable-cli",
 ]
 resolver = "3"
@@ -33,7 +33,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # In-tree crates referenced by sibling crates.
 remarkable-metadata = { path = "crates/remarkable-metadata", version = "0.1.0" }
 remarkable-tablet = { path = "crates/remarkable-tablet", version = "0.1.0" }
-remarkable-rm-parser = { path = "crates/remarkable-rm-parser", version = "0.1.0" }
+remarkable-rm = { path = "crates/remarkable-rm", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

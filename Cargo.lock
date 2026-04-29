@@ -1991,7 +1991,7 @@ dependencies = [
  "insta",
  "predicates",
  "remarkable-metadata",
- "remarkable-rm-parser",
+ "remarkable-rm",
  "remarkable-tablet",
  "serde",
  "serde_json",
@@ -2016,7 +2016,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "remarkable-rm-parser"
+name = "remarkable-rm"
 version = "0.1.0"
 dependencies = [
  "byteorder",

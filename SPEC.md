@@ -287,7 +287,7 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
  - +split into workspace with crates:
     - +`remarkable-metadata`: pure-data parsing of `.metadata`/`.content`, document tree, path resolver (publishable)
     - +`remarkable-tablet`: SSH/SFTP client, file ops, xochitl control; depends on `remarkable-metadata`
-    - +`remarkable-rm-parser`: stub for the `.rm` binary format work below (publishable)
+    - +`remarkable-rm`: stub for the `.rm` binary format work below (publishable)
     - +`remarkable-cli`: clap surface and commands; depends on the three above
     - +`FakeConnection` lives behind a `test-utils` feature on `remarkable-tablet`, so `tempfile`/`filetime` are no longer runtime deps of the CLI
 10. **.rm binary parser** — Parse v3-v6 format into stroke data. Unit tests with sample files.
