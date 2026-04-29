@@ -2,11 +2,11 @@ use serde::Serialize;
 
 use crate::cli::InfoArgs;
 use crate::commands::common::{self, CommandContext, EntryView};
-use remarkable_tablet::connection::TabletConnection;
 use crate::error::CliError;
 use crate::output::{self, OutputFormat};
 use remarkable_metadata::path_resolver::{self, Resolved};
 use remarkable_metadata::tree::DocumentTree;
+use remarkable_tablet::connection::TabletConnection;
 
 #[derive(Serialize, Debug)]
 pub struct InfoOutput {

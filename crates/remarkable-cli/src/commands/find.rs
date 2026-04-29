@@ -3,8 +3,8 @@ use glob::{MatchOptions, Pattern};
 use crate::cli::{FindArgs, FindTypeFilter};
 use crate::commands::common::{self, CommandContext, EntryView};
 use crate::error::CliError;
-use remarkable_metadata::metadata::DocumentEntry;
 use crate::output::{self, OutputFormat};
+use remarkable_metadata::metadata::DocumentEntry;
 use remarkable_metadata::tree::DocumentTree;
 
 pub type FindItem = EntryView;

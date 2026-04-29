@@ -18,14 +18,14 @@ use uuid::Uuid;
 
 use crate::cli::DownloadArgs;
 use crate::commands::common::{self, CommandContext};
-use remarkable_tablet::connection::TabletConnection;
 use crate::error::CliError;
-use remarkable_metadata::metadata::{self, DocumentEntry, FileType, ItemKind};
 use crate::output::{self, OutputFormat};
+use remarkable_metadata::metadata::{self, DocumentEntry, FileType, ItemKind};
 use remarkable_metadata::page_range::PageSelection;
 use remarkable_metadata::path_resolver::{self, Resolved};
-use remarkable_tablet::transfer;
 use remarkable_metadata::tree::DocumentTree;
+use remarkable_tablet::connection::TabletConnection;
+use remarkable_tablet::transfer;
 
 #[derive(Serialize, Debug)]
 pub struct DownloadOutput {

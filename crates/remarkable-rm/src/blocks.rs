@@ -158,10 +158,7 @@ mod tests {
     fn rejects_wrong_magic() {
         let mut bytes = b"NotAReMarkableFile_____________________________".to_vec();
         bytes.truncate(43);
-        assert!(matches!(
-            iter_blocks(&bytes),
-            Err(ParseError::BadMagic)
-        ));
+        assert!(matches!(iter_blocks(&bytes), Err(ParseError::BadMagic)));
     }
 
     #[test]

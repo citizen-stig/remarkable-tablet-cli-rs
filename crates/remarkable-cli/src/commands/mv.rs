@@ -13,13 +13,13 @@ use uuid::Uuid;
 use crate::cli::MvArgs;
 use crate::commands::common::{self, CommandContext, is_false};
 use crate::commands::rename::bump_version;
-use remarkable_tablet::connection::TabletConnection;
 use crate::error::CliError;
-use remarkable_metadata::metadata::{DocumentEntry, Parent};
 use crate::output::{self, OutputFormat};
+use remarkable_metadata::metadata::{DocumentEntry, Parent};
 use remarkable_metadata::path_resolver::{self, Resolved};
-use remarkable_tablet::tablet;
 use remarkable_metadata::tree::{ChildLookup, DocumentTree, ListFilter};
+use remarkable_tablet::connection::TabletConnection;
+use remarkable_tablet::tablet;
 
 #[derive(Serialize, Debug)]
 pub struct MvOutput {
@@ -221,9 +221,9 @@ fn format_human(o: &MvOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use remarkable_tablet::connection::FakeConnection;
-    use remarkable_metadata::metadata::{FileType, ItemKind};
     use chrono::{TimeZone, Utc};
+    use remarkable_metadata::metadata::{FileType, ItemKind};
+    use remarkable_tablet::connection::FakeConnection;
 
     fn make_folder(uuid: &str, name: &str, parent: Parent) -> DocumentEntry {
         let deleted = parent == Parent::Trash;

@@ -8,11 +8,11 @@
 
 use remarkable_cli::cli::{MkdirArgs, MvArgs, RenameArgs, RmArgs};
 use remarkable_cli::commands::{mkdir, mv, rename, rm};
-use remarkable_tablet::connection::{FakeConnection, TabletConnection};
 use remarkable_cli::error::CliError;
 use remarkable_metadata::metadata::{ItemType, Parent, RawMetadata};
-use remarkable_tablet::tablet::load_all_metadata;
 use remarkable_metadata::tree::DocumentTree;
+use remarkable_tablet::connection::{FakeConnection, TabletConnection};
+use remarkable_tablet::tablet::load_all_metadata;
 
 const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
 

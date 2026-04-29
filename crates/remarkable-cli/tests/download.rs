@@ -3,12 +3,12 @@ use std::str::FromStr;
 
 use remarkable_cli::cli::DownloadArgs;
 use remarkable_cli::commands::download;
-use remarkable_tablet::connection::FakeConnection;
 use remarkable_cli::error::CliError;
 use remarkable_metadata::metadata::FileType;
 use remarkable_metadata::page_range::PageSelection;
-use remarkable_tablet::tablet::load_all_metadata;
 use remarkable_metadata::tree::DocumentTree;
+use remarkable_tablet::connection::FakeConnection;
+use remarkable_tablet::tablet::load_all_metadata;
 
 const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
 

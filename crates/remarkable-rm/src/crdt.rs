@@ -92,7 +92,13 @@ mod tests {
     fn crdt_id_multibyte_seq() {
         // author=2, seq=300 (0xAC 0x02)
         let mut r = Reader::new(&[0x02, 0xAC, 0x02]);
-        assert_eq!(r.read_crdt_id().unwrap(), CrdtId { author: 2, seq: 300 });
+        assert_eq!(
+            r.read_crdt_id().unwrap(),
+            CrdtId {
+                author: 2,
+                seq: 300
+            }
+        );
     }
 
     /// Build the bytes for: tag(idx, Length4) + length(LE u32) + content.

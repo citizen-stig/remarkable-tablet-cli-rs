@@ -12,11 +12,11 @@ pub mod metadata_loader;
 pub mod tablet;
 pub mod transfer;
 
+#[cfg(feature = "test-utils")]
+pub use connection::FakeConnection;
 pub use connection::{
     ConnectOptions, RemoteEntry, RemoteFileKind, RemoteMetadata, SshConnection, TabletConnection,
 };
-#[cfg(feature = "test-utils")]
-pub use connection::FakeConnection;
 pub use error::TabletError;
 pub use metadata_loader::{LoadDiagnostics, load_all_metadata, load_all_metadata_full};
 pub use tablet::{

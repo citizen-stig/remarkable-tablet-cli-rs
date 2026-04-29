@@ -25,7 +25,7 @@ pub enum ParseError {
         got_type: u8,
     },
 
-    #[error("varuint overflow: more than 10 bytes consumed")]
+    #[error("varuint overflow: encoded value exceeds u64 range")]
     VarUIntOverflow,
 
     #[error("subblock length mismatch: declared {declared}, consumed {consumed}")]

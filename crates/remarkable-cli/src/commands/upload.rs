@@ -18,14 +18,14 @@ use uuid::Uuid;
 
 use crate::cli::UploadArgs;
 use crate::commands::common::{self, CommandContext, is_false};
-use remarkable_tablet::connection::TabletConnection;
 use crate::error::CliError;
-use remarkable_metadata::metadata::{FileType, ItemType, Parent, RawContent, RawMetadata};
 use crate::output::{self, OutputFormat};
+use remarkable_metadata::metadata::{FileType, ItemType, Parent, RawContent, RawMetadata};
 use remarkable_metadata::path_resolver::{self, Resolved};
+use remarkable_metadata::tree::{ChildLookup, DocumentTree};
+use remarkable_tablet::connection::TabletConnection;
 use remarkable_tablet::tablet;
 use remarkable_tablet::transfer;
-use remarkable_metadata::tree::{ChildLookup, DocumentTree};
 
 #[derive(Serialize, Debug)]
 pub struct UploadOutput {
@@ -369,9 +369,9 @@ fn format_human(o: &UploadOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use remarkable_tablet::connection::FakeConnection;
-    use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind, Parent};
     use chrono::{TimeZone, Utc};
+    use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind, Parent};
+    use remarkable_tablet::connection::FakeConnection;
     use std::io::Write;
 
     fn make_folder(uuid: &str, name: &str, parent: Parent) -> DocumentEntry {

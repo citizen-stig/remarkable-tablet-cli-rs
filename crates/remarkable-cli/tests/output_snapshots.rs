@@ -9,10 +9,10 @@
 use insta::assert_snapshot;
 use remarkable_cli::cli::{FindArgs, InfoArgs, LsArgs};
 use remarkable_cli::commands::{find, info, ls};
-use remarkable_tablet::connection::FakeConnection;
 use remarkable_cli::output::{self, OutputFormat};
-use remarkable_tablet::tablet::{self, load_all_metadata};
 use remarkable_metadata::tree::{DocumentTree, EntryKindFilter};
+use remarkable_tablet::connection::FakeConnection;
+use remarkable_tablet::tablet::{self, load_all_metadata};
 
 const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
 

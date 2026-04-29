@@ -26,9 +26,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::BackupArgs;
 use crate::commands::common::{self, CommandContext};
-use remarkable_tablet::connection::TabletConnection;
 use crate::error::CliError;
 use crate::output::OutputFormat;
+use remarkable_tablet::connection::TabletConnection;
 use remarkable_tablet::transfer::{self, TRANSFER_CONCURRENCY, WalkedFile};
 
 const MANIFEST_FILENAME: &str = "backup_manifest.json";

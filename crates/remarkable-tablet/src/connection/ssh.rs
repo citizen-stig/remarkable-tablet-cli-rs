@@ -65,7 +65,9 @@ impl SshConnection {
             ))
         })?
         .map_err(|e| {
-            crate::error::TabletError::ConnectionFailed(format!("SSH connect to {addr} failed: {e}"))
+            crate::error::TabletError::ConnectionFailed(format!(
+                "SSH connect to {addr} failed: {e}"
+            ))
         })?;
 
         if !authenticate(&mut handle, opts).await? {

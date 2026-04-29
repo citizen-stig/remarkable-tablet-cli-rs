@@ -219,13 +219,21 @@ fn read_point_v2(reader: &mut Reader<'_>) -> Result<Point, ParseError> {
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn scale_to_u16(v: f32) -> u16 {
     let clamped = v.clamp(0.0, f32::from(u16::MAX));
-    if clamped.is_nan() { 0 } else { clamped.round() as u16 }
+    if clamped.is_nan() {
+        0
+    } else {
+        clamped.round() as u16
+    }
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn scale_to_u8(v: f32) -> u8 {
     let clamped = v.clamp(0.0, f32::from(u8::MAX));
-    if clamped.is_nan() { 0 } else { clamped.round() as u8 }
+    if clamped.is_nan() {
+        0
+    } else {
+        clamped.round() as u8
+    }
 }
 
 #[cfg(test)]

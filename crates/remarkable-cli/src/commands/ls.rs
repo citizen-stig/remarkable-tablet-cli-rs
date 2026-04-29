@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::cli::LsArgs;
 use crate::commands::common::{self, CommandContext, EntryView, ItemKind, is_false};
 use crate::error::CliError;
-use remarkable_metadata::metadata::{DocumentEntry, FileType, Parent};
 use crate::output::{self, OutputFormat};
+use remarkable_metadata::metadata::{DocumentEntry, FileType, Parent};
 use remarkable_metadata::path_resolver::{self, Resolved};
 use remarkable_metadata::tree::{DocumentTree, ListFilter};
 

@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 
 use remarkable_cli::cli::UploadArgs;
 use remarkable_cli::commands::upload;
-use remarkable_tablet::connection::{FakeConnection, TabletConnection};
 use remarkable_cli::error::CliError;
 use remarkable_metadata::metadata::{FileType, ItemType, Parent, RawContent, RawMetadata};
-use remarkable_tablet::tablet::load_all_metadata;
 use remarkable_metadata::tree::DocumentTree;
+use remarkable_tablet::connection::{FakeConnection, TabletConnection};
+use remarkable_tablet::tablet::load_all_metadata;
 
 const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
 

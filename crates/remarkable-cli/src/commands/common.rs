@@ -9,13 +9,13 @@ use uuid::Uuid;
 
 use crate::cli::GlobalOptions;
 use crate::config::ResolvedConfig;
-use remarkable_tablet::connection::{ConnectOptions, SshConnection};
 use crate::error::CliError;
+use crate::output;
 pub use remarkable_metadata::metadata::ItemKind;
 use remarkable_metadata::metadata::{DocumentEntry, FileType};
-use crate::output;
-use remarkable_tablet::tablet::{self};
 use remarkable_metadata::tree::DocumentTree;
+use remarkable_tablet::connection::{ConnectOptions, SshConnection};
+use remarkable_tablet::tablet::{self};
 
 // serde's `skip_serializing_if` predicate requires `&T` by value contract.
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -244,9 +244,9 @@ async fn discover_host(global: &GlobalOptions, cfg: &ResolvedConfig) -> anyhow::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use remarkable_metadata::metadata::{FileType, ItemKind, Parent};
     use remarkable_metadata::tree::DocumentTree;
-    use chrono::TimeZone;
 
     fn make_doc(uuid: &str, name: &str, parent: Parent, file_type: FileType) -> DocumentEntry {
         let deleted = parent == Parent::Trash;

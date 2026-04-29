@@ -12,12 +12,12 @@ use uuid::Uuid;
 
 use crate::cli::RenameArgs;
 use crate::commands::common::{self, CommandContext, is_false};
-use remarkable_tablet::connection::TabletConnection;
 use crate::error::CliError;
 use crate::output::{self, OutputFormat};
 use remarkable_metadata::path_resolver::{self, Resolved};
-use remarkable_tablet::tablet;
 use remarkable_metadata::tree::{ChildLookup, DocumentTree};
+use remarkable_tablet::connection::TabletConnection;
+use remarkable_tablet::tablet;
 
 #[derive(Serialize, Debug)]
 pub struct RenameOutput {
@@ -161,7 +161,11 @@ fn parent_path<'a>(
 
 /// Synthesize the target's full path under a hypothetical name. Used when
 /// the rename is a no-op so we can still report a stable path.
-fn display_path(tree: &DocumentTree, entry: &remarkable_metadata::metadata::DocumentEntry, name: &str) -> String {
+fn display_path(
+    tree: &DocumentTree,
+    entry: &remarkable_metadata::metadata::DocumentEntry,
+    name: &str,
+) -> String {
     parent_path(tree, entry).map_or_else(|| format!("/{name}"), |p| format!("{p}/{name}"))
 }
 
@@ -199,9 +203,9 @@ fn format_human(o: &RenameOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use remarkable_tablet::connection::FakeConnection;
-    use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind, Parent};
     use chrono::{TimeZone, Utc};
+    use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind, Parent};
+    use remarkable_tablet::connection::FakeConnection;
 
     fn make_doc(uuid: &str, name: &str, parent: Parent, file_type: FileType) -> DocumentEntry {
         let deleted = parent == Parent::Trash;

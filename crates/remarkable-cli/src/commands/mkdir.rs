@@ -14,12 +14,12 @@ use uuid::Uuid;
 
 use crate::cli::MkdirArgs;
 use crate::commands::common::{self, CommandContext};
-use remarkable_tablet::connection::TabletConnection;
 use crate::error::CliError;
-use remarkable_metadata::metadata::{ItemType, Parent, RawMetadata};
 use crate::output::{self, OutputFormat};
-use remarkable_tablet::tablet;
+use remarkable_metadata::metadata::{ItemType, Parent, RawMetadata};
 use remarkable_metadata::tree::{ChildLookup, DocumentTree};
+use remarkable_tablet::connection::TabletConnection;
+use remarkable_tablet::tablet;
 
 #[derive(Serialize, Debug)]
 pub struct MkdirOutput {

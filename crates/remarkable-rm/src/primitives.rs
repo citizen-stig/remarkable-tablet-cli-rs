@@ -33,7 +33,10 @@ impl<'a> Reader<'a> {
 
     fn require(&self, needed: usize) -> Result<(), ParseError> {
         if self.remaining() < needed {
-            return Err(ParseError::Truncated { needed, got: self.remaining() });
+            return Err(ParseError::Truncated {
+                needed,
+                got: self.remaining(),
+            });
         }
         Ok(())
     }
@@ -83,16 +86,20 @@ impl<'a> Reader<'a> {
     /// LEB128 unsigned varint, capped at 10 bytes (effectively `u64`). Spec §2.
     pub fn read_varuint(&mut self) -> Result<u64, ParseError> {
         let mut result: u64 = 0;
-        let mut shift: u32 = 0;
-        for _ in 0..10 {
+        for shift in (0..63).step_by(7) {
             let byte = self.read_u8()?;
             result |= u64::from(byte & 0x7F) << shift;
             if byte & 0x80 == 0 {
                 return Ok(result);
             }
-            shift += 7;
         }
-        Err(ParseError::VarUIntOverflow)
+
+        let byte = self.read_u8()?;
+        if byte & 0x80 != 0 || byte & 0x7F > 1 {
+            return Err(ParseError::VarUIntOverflow);
+        }
+        result |= u64::from(byte & 0x7F) << 63;
+        Ok(result)
     }
 
     /// Take the next `n` bytes as an isolated child reader; the parent
@@ -151,6 +158,20 @@ mod tests {
     fn varuint_overflow() {
         // 11 continuation bytes — must error.
         let bytes = [0xFFu8; 11];
+        let mut r = Reader::new(&bytes);
+        assert!(matches!(r.read_varuint(), Err(ParseError::VarUIntOverflow)));
+    }
+
+    #[test]
+    fn varuint_tenth_byte_payload_overflow() {
+        let bytes = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02];
+        let mut r = Reader::new(&bytes);
+        assert!(matches!(r.read_varuint(), Err(ParseError::VarUIntOverflow)));
+    }
+
+    #[test]
+    fn varuint_tenth_byte_must_terminate() {
+        let bytes = [0x80; 10];
         let mut r = Reader::new(&bytes);
         assert!(matches!(r.read_varuint(), Err(ParseError::VarUIntOverflow)));
     }

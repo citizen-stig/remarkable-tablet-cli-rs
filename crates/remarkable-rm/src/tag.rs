@@ -33,8 +33,7 @@ impl<'a> Reader<'a> {
         let value = self.read_varuint()?;
         let raw_type = value & 0x0F;
         let raw_index = value >> 4;
-        let index =
-            u32::try_from(raw_index).map_err(|_| ParseError::VarUIntOverflow)?;
+        let index = u32::try_from(raw_index).map_err(|_| ParseError::VarUIntOverflow)?;
         let tag_type = match raw_type {
             0x01 => TagType::Byte1,
             0x04 => TagType::Byte4,
@@ -149,7 +148,10 @@ mod tests {
         let mut r = Reader::new(&[0x12]); // index=1, type=0x2 (unknown)
         assert!(matches!(
             r.read_tag(),
-            Err(ParseError::UnknownTagType { index: 1, tag_type: 0x02 })
+            Err(ParseError::UnknownTagType {
+                index: 1,
+                tag_type: 0x02
+            })
         ));
     }
 
@@ -159,7 +161,11 @@ mod tests {
         let err = r.expect_tag(2, TagType::Id).unwrap_err();
         assert!(matches!(
             err,
-            ParseError::UnexpectedTag { expected_index: 2, got_index: 1, .. }
+            ParseError::UnexpectedTag {
+                expected_index: 2,
+                got_index: 1,
+                ..
+            }
         ));
     }
 

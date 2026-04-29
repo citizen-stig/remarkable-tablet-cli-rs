@@ -1,6 +1,7 @@
 //! Top-level page representation, assembled from blocks per spec §10.
 
-use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::blocks::{BlockType, iter_blocks};
 use crate::crdt::CrdtId;
@@ -49,10 +50,18 @@ pub fn parse_page(bytes: &[u8]) -> Result<Page, ParseError> {
                 });
             }
             Some(BlockType::SceneGroupItem) => {
-                // Parsed for forward-compat / format validation; the renderer
-                // links lines directly to layers via `parent_id`, so the
-                // group records aren't needed for assembly.
-                let _ = read_scene_item(&mut body, ItemType::Group, |sub| sub.read_id(2))?;
+                let envelope = read_scene_item(&mut body, ItemType::Group, |sub| sub.read_id(2))?;
+                if envelope.deleted_length == 0
+                    && let Some(node_id) = envelope.value
+                {
+                    intermediate.scene_items.push(SceneItemRecord {
+                        parent_id: envelope.parent_id,
+                        item_id: envelope.item_id,
+                        left_id: envelope.left_id,
+                        right_id: envelope.right_id,
+                        kind: SceneItemKind::Group { node_id },
+                    });
+                }
             }
             Some(BlockType::SceneLineItem) => {
                 let envelope = read_scene_item(&mut body, ItemType::Line, |sub| {
@@ -61,9 +70,12 @@ pub fn parse_page(bytes: &[u8]) -> Result<Page, ParseError> {
                 if envelope.deleted_length == 0
                     && let Some(line) = envelope.value
                 {
-                    intermediate.lines.push(LineRecord {
+                    intermediate.scene_items.push(SceneItemRecord {
                         parent_id: envelope.parent_id,
-                        line,
+                        item_id: envelope.item_id,
+                        left_id: envelope.left_id,
+                        right_id: envelope.right_id,
+                        kind: SceneItemKind::Line(line),
                     });
                 }
             }
@@ -87,7 +99,7 @@ pub fn parse_page(bytes: &[u8]) -> Result<Page, ParseError> {
 struct Intermediate {
     trees: Vec<SceneTreeBlock>,
     nodes: Vec<NodeProps>,
-    lines: Vec<LineRecord>,
+    scene_items: Vec<SceneItemRecord>,
     text: Option<RootText>,
     paper_size: Option<(u32, u32)>,
 }
@@ -100,17 +112,26 @@ struct NodeProps {
 }
 
 #[derive(Debug)]
-struct LineRecord {
-    parent_id: CrdtId, // identifies the layer node this stroke belongs to
-    line: Line,
+struct SceneItemRecord {
+    parent_id: CrdtId,
+    item_id: CrdtId,
+    left_id: CrdtId,
+    right_id: CrdtId,
+    kind: SceneItemKind,
+}
+
+#[derive(Debug)]
+enum SceneItemKind {
+    Group { node_id: CrdtId },
+    Line(Line),
 }
 
 impl Intermediate {
     fn assemble(self) -> Page {
         let Self {
-            trees,
+            trees: _trees,
             nodes,
-            lines,
+            scene_items,
             text,
             paper_size,
         } = self;
@@ -120,28 +141,31 @@ impl Intermediate {
             .map(|n| (n.node_id, (n.label, n.visible)))
             .collect();
 
-        let mut lines_by_parent: HashMap<CrdtId, Vec<Line>> = HashMap::new();
-        for lr in lines {
-            lines_by_parent.entry(lr.parent_id).or_default().push(lr.line);
+        let mut items_by_parent: HashMap<CrdtId, Vec<SceneItemRecord>> = HashMap::new();
+        for item in scene_items {
+            items_by_parent
+                .entry(item.parent_id)
+                .or_default()
+                .push(item);
         }
 
-        // Layers appear in the order their tree_id is first seen.
+        let root_items = items_by_parent.remove(&CrdtId::ROOT).unwrap_or_default();
         let mut layers = Vec::new();
         let mut seen: HashSet<CrdtId> = HashSet::new();
-        for tree in trees {
-            if !seen.insert(tree.tree_id) {
+        for item in order_scene_items(root_items) {
+            let SceneItemKind::Group { node_id } = item.kind else {
+                continue;
+            };
+            if !seen.insert(node_id) {
                 continue;
             }
-            if tree.parent_id != CrdtId::ROOT {
-                continue;
-            }
-            let id = tree.tree_id;
             let (name, visible) = node_props
-                .remove(&id)
+                .remove(&node_id)
                 .unwrap_or_else(|| (String::new(), true));
-            let layer_lines = lines_by_parent.remove(&id).unwrap_or_default();
+            let mut layer_lines = Vec::new();
+            collect_lines(node_id, &mut items_by_parent, &mut layer_lines);
             layers.push(Layer {
-                node_id: id,
+                node_id,
                 name,
                 visible,
                 lines: layer_lines,
@@ -154,6 +178,94 @@ impl Intermediate {
             paper_size,
         }
     }
+}
+
+fn collect_lines(
+    parent_id: CrdtId,
+    items_by_parent: &mut HashMap<CrdtId, Vec<SceneItemRecord>>,
+    lines: &mut Vec<Line>,
+) {
+    let Some(items) = items_by_parent.remove(&parent_id) else {
+        return;
+    };
+
+    for item in order_scene_items(items) {
+        match item.kind {
+            SceneItemKind::Group { node_id } => collect_lines(node_id, items_by_parent, lines),
+            SceneItemKind::Line(line) => lines.push(line),
+        }
+    }
+}
+
+fn order_scene_items(items: Vec<SceneItemRecord>) -> Vec<SceneItemRecord> {
+    if items.len() < 2 {
+        return items;
+    }
+
+    let index_by_id: HashMap<CrdtId, usize> = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (item.item_id, index))
+        .collect();
+
+    let mut edges = vec![Vec::new(); items.len()];
+    let mut indegree = vec![0usize; items.len()];
+    for (index, item) in items.iter().enumerate() {
+        if let Some(&left) = index_by_id.get(&item.left_id) {
+            add_edge(left, index, &mut edges, &mut indegree);
+        }
+        if let Some(&right) = index_by_id.get(&item.right_id) {
+            add_edge(index, right, &mut edges, &mut indegree);
+        }
+    }
+
+    let mut ready = BinaryHeap::new();
+    for (index, item) in items.iter().enumerate() {
+        if indegree[index] == 0 {
+            ready.push(Reverse((item.item_id, index)));
+        }
+    }
+
+    let mut emitted = vec![false; items.len()];
+    let mut order = Vec::with_capacity(items.len());
+    while let Some(Reverse((_, index))) = ready.pop() {
+        if emitted[index] {
+            continue;
+        }
+        emitted[index] = true;
+        order.push(index);
+        for &next in &edges[index] {
+            indegree[next] -= 1;
+            if indegree[next] == 0 {
+                ready.push(Reverse((items[next].item_id, next)));
+            }
+        }
+    }
+
+    if order.len() < items.len() {
+        let mut remaining: Vec<_> = items
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !emitted[*index])
+            .map(|(index, item)| (item.item_id, index))
+            .collect();
+        remaining.sort_unstable();
+        order.extend(remaining.into_iter().map(|(_, index)| index));
+    }
+
+    let mut items = items.into_iter().map(Some).collect::<Vec<_>>();
+    order
+        .into_iter()
+        .map(|index| items[index].take().unwrap())
+        .collect()
+}
+
+fn add_edge(from: usize, to: usize, edges: &mut [Vec<usize>], indegree: &mut [usize]) {
+    if from == to || edges[from].contains(&to) {
+        return;
+    }
+    edges[from].push(to);
+    indegree[to] += 1;
 }
 
 /// Extract the (optional) `paper_size` from a `SceneInfoBlock` body — spec
