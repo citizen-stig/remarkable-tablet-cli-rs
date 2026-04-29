@@ -20,5 +20,5 @@ pub mod tag;
 pub use blocks::{BlockHeader, BlockType};
 pub use crdt::{CrdtId, LwwValue};
 pub use document::{Layer, Page};
-pub use error::{ParseError, Result};
+pub use error::ParseError;
 pub use scene::line::{Line, Pen, PenColor, Point};
