@@ -6,6 +6,7 @@ pub enum ParseError {
     Truncated { needed: usize, got: usize },
 
     #[error("invalid magic header: not a v6 .rm file")]
+    // TODO: Add what was there
     BadMagic,
 
     #[error("unsupported file version: {0}")]
@@ -39,6 +40,13 @@ pub enum ParseError {
 
     #[error("invalid paragraph style: {0}")]
     InvalidParagraphStyle(u8),
+
+    #[error("invalid UTF-8 in string field")]
+    InvalidUtf8,
+
+    #[error("invalid block: {0}")]
+    // TODO:
+    InvalidBlock(&'static str),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

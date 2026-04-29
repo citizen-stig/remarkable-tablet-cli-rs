@@ -6,7 +6,6 @@ license.workspace = true
 description = "Parser and renderer for reMarkable .rm notebook page files (Phase 4 — work in progress)."
 
 [dependencies]
-byteorder.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 

@@ -290,10 +290,15 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
     - +`remarkable-rm`: stub for the `.rm` binary format work below (publishable)
     - +`remarkable-cli`: clap surface and commands; depends on the three above
     - +`FakeConnection` lives behind a `test-utils` feature on `remarkable-tablet`, so `tempfile`/`filetime` are no longer runtime deps of the CLI
-10. **.rm binary parser** — Parse v3-v6 format into stroke data. Unit tests with sample files.
-   - find enough sample files
-   - good documentation
-   - rely on type-system for robust implementation
+10. +**.rm v6 binary parser** — Parse v6 stroke data into a `Page { layers, text, paper_size }`. Slice-based `Reader<'a>` with bounded sub-readers; type-system rejects invalid pen/color/tag values. Four real-tablet v6 fixtures (`smoke`, `pens-small`, `edits`, `layers`) drive integration tests; ground truth in `crates/remarkable-rm/tests/fixtures/README.md`.
+   - +sample files: 4 v6 captures from a reMarkable 2 (firmware 3.x)
+   - +rely on type-system for robust implementation: closed enums + bounded sub-readers
+   - **Deferred to a follow-up**:
+     - **v3 / v5 parsing** — separate code path, no fixtures yet; entry point currently errors with `UnsupportedVersion(n)` for non-6 headers.
+     - **Surfacing GlyphRange / PageInfo / AuthorIds / SceneTextItem / Tombstone** — bytes are consumed correctly, but no public API exposes them (renderer doesn't need them).
+     - **Inline / paragraph text formatting** — `RootText` parser handles the wire format, but none of the current fixtures contain text blocks, so the path is unexercised.
+     - **Anchor-group fixture confirmation** (spec §5.3 TODO) — only the new LWW-wrapped layout (indices 7-10) is implemented; the older 4-6 layout has no fixture coverage.
+     - **Round-trip / writer support** — read-only renderer follows ddvk and discards trailing `extra_data`. Round-trip would need rmscene-style preservation.
 11. **PNG rendering** — Rasterize strokes, `remarkable-cli render` command. Deliverable: PNG output of notebook pages.
 
 ### Phase 5: Polish
