@@ -7,6 +7,8 @@ pub mod info;
 pub mod ls;
 pub mod mkdir;
 pub mod mv;
+pub mod notebook_pages;
 pub mod rename;
+pub mod render;
 pub mod rm;
 pub mod upload;

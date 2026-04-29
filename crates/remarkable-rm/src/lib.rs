@@ -14,6 +14,7 @@ pub mod crdt;
 pub mod document;
 pub mod error;
 pub mod primitives;
+pub mod render;
 pub mod scene;
 pub mod tag;
 
@@ -21,4 +22,5 @@ pub use blocks::{BlockHeader, BlockType};
 pub use crdt::{CrdtId, LwwValue};
 pub use document::{Layer, Page, parse_page};
 pub use error::ParseError;
+pub use render::{DEFAULT_HEIGHT, DEFAULT_WIDTH, RenderError, RenderOptions, render_page};
 pub use scene::line::{Line, Pen, PenColor, Point};

@@ -166,6 +166,9 @@ pub enum Command {
 
     /// Delete documents/folders (soft delete by default)
     Rm(RmArgs),
+
+    /// Render notebook pages to PNG
+    Render(RenderArgs),
 }
 
 // -- Per-command args --
@@ -316,6 +319,34 @@ pub struct RmArgs {
     /// Required for deleting non-empty folders
     #[arg(short, long)]
     pub recursive: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RenderArgs {
+    /// Path or UUID of the notebook to render
+    pub path_or_uuid: String,
+
+    /// Output directory (default: ./<name>/). Refuses to overwrite an
+    /// existing destination.
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+
+    /// Page range (e.g., "1-5" or "1,3,7"). 1-indexed.
+    #[arg(long)]
+    pub pages: Option<PageSelection>,
+
+    /// Canvas width in pixels
+    #[arg(long, default_value_t = remarkable_rm::DEFAULT_WIDTH)]
+    pub width: u32,
+
+    /// Render dots-per-inch (informational; emitted in JSON output)
+    #[arg(long, default_value_t = 226)]
+    pub dpi: u32,
+
+    /// Render from a local backup directory (rooted at the xochitl tree)
+    /// instead of the tablet. Skips SSH entirely.
+    #[arg(long)]
+    pub from_backup: Option<PathBuf>,
 }
 
 // -- Helper enums --

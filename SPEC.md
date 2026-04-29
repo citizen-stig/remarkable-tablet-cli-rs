@@ -306,7 +306,7 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 13. **PDF/ePub background compositing** — Render source document pages under stroke layers (optional enhancement).
 14. **CI + release pipeline** — GitHub Actions, cross-compilation, README.
 15. Publishing:
-    - cli: installing via  cargo install and/or archlinux AUR
+    - cli: installing via cargo install and/or archlinux AUR
     - binary parser on crates.io
     - metadata reader on crates.io
 

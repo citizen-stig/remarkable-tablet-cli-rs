@@ -1,5 +1,6 @@
 ---
 source: crates/remarkable-cli/tests/cli.rs
+assertion_line: 34
 expression: stdout
 ---
 Command-line tool for browsing, backing up, and managing files on a reMarkable tablet.
@@ -18,6 +19,7 @@ Commands:
   mkdir     Create folder(s) on the tablet
   rename    Rename a document or folder
   rm        Delete documents/folders (soft delete by default)
+  render    Render notebook pages to PNG
   help      Print this message or the help of the given subcommand(s)
 
 Options:
