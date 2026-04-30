@@ -66,7 +66,7 @@ impl RenderOptions {
 /// # Errors
 /// Returns an error if the canvas dimensions are zero or exceed
 /// `tiny-skia`'s allocation limit, or if the PNG encoder fails.
-pub fn render_page(page: &Page, opts: &RenderOptions) -> Result<Vec<u8>, RenderError> {
+pub fn render_page(page: &Page, opts: RenderOptions) -> Result<Vec<u8>, RenderError> {
     let mut pixmap = Pixmap::new(opts.width, opts.height).ok_or(RenderError::InvalidCanvas {
         width: opts.width,
         height: opts.height,
@@ -92,7 +92,7 @@ pub fn render_page(page: &Page, opts: &RenderOptions) -> Result<Vec<u8>, RenderE
 /// requested output canvas with one tiny-skia transform so geometry and
 /// effective stroke widths scale together.
 #[allow(clippy::cast_precision_loss)]
-fn page_to_canvas_transform(page: &Page, opts: &RenderOptions) -> Transform {
+fn page_to_canvas_transform(page: &Page, opts: RenderOptions) -> Transform {
     let source = RenderOptions::for_page(page);
     let scale_x = opts.width as f32 / source.width as f32;
     let scale_y = opts.height as f32 / source.height as f32;
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn empty_page_renders_white_canvas() {
         let page = Page::default();
-        let png = render_page(&page, &RenderOptions::default()).unwrap();
+        let png = render_page(&page, RenderOptions::default()).unwrap();
         let decoded = Pixmap::decode_png(&png).unwrap();
         assert_eq!(decoded.width(), DEFAULT_WIDTH);
         assert_eq!(decoded.height(), DEFAULT_HEIGHT);
@@ -282,7 +282,7 @@ mod tests {
             Pen::FinelinerV2,
         );
         let page = page_with_lines(vec![line], None);
-        let png = render_page(&page, &RenderOptions::default()).unwrap();
+        let png = render_page(&page, RenderOptions::default()).unwrap();
         let decoded = Pixmap::decode_png(&png).unwrap();
         let dark_pixel_count = decoded
             .pixels()
@@ -309,7 +309,7 @@ mod tests {
             text: None,
             paper_size: None,
         };
-        let png = render_page(&page, &RenderOptions::default()).unwrap();
+        let png = render_page(&page, RenderOptions::default()).unwrap();
         let decoded = Pixmap::decode_png(&png).unwrap();
         let any_ink = decoded
             .pixels()
@@ -326,7 +326,7 @@ mod tests {
             Pen::Eraser,
         );
         let page = page_with_lines(vec![line], None);
-        let png = render_page(&page, &RenderOptions::default()).unwrap();
+        let png = render_page(&page, RenderOptions::default()).unwrap();
         let decoded = Pixmap::decode_png(&png).unwrap();
         let any_ink = decoded
             .pixels()
@@ -367,7 +367,7 @@ mod tests {
         let page = page_with_lines(vec![left, right], None);
         let png = render_page(
             &page,
-            &RenderOptions {
+            RenderOptions {
                 width: 702,
                 height: 936,
             },
@@ -400,7 +400,7 @@ mod tests {
         let page = page_with_lines(vec![left, right], Some((800, 600)));
         let png = render_page(
             &page,
-            &RenderOptions {
+            RenderOptions {
                 width: 400,
                 height: 300,
             },

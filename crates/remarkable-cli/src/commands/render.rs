@@ -24,6 +24,7 @@ use remarkable_rm::{RenderOptions, parse_page, render_page};
 use remarkable_tablet::connection::{
     RemoteEntry, RemoteFileKind, RemoteMetadata, TabletConnection,
 };
+use remarkable_tablet::{IoSource, TabletError};
 use remarkable_tablet::metadata_loader;
 
 #[derive(Serialize, Debug)]
@@ -136,7 +137,7 @@ pub async fn run_with_conn<C: TabletConnection>(
                 .paper_size
                 .map_or(remarkable_rm::DEFAULT_HEIGHT, |(_, h)| h),
         };
-        let png = render_page(&page, &opts).with_context(|| format!("render {remote}"))?;
+        let png = render_page(&page, opts).with_context(|| format!("render {remote}"))?;
         let output_path = output_dir.join(format!("{}_page_{page_index}.png", entry.uuid));
         tokio::fs::write(&output_path, &png)
             .await
@@ -245,24 +246,43 @@ fn format_human(o: &RenderOutput) -> String {
 struct BackupConnection;
 
 impl TabletConnection for BackupConnection {
-    async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>> {
-        tokio::fs::read(path)
-            .await
-            .with_context(|| format!("read {path}"))
+    async fn read_file(&self, path: &str) -> Result<Vec<u8>, TabletError> {
+        tokio::fs::read(path).await.map_err(|source| TabletError::Io {
+            op: "read",
+            path: path.to_string(),
+            source: IoSource::Local(source),
+        })
     }
 
-    async fn write_file(&self, _path: &str, _data: &[u8]) -> anyhow::Result<()> {
-        bail!("backup connection is read-only");
+    async fn write_file(&self, _path: &str, _data: &[u8]) -> Result<(), TabletError> {
+        Err(TabletError::BackupReadOnly { op: "write" })
     }
 
-    async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<RemoteEntry>> {
+    async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, TabletError> {
         let mut rd = tokio::fs::read_dir(path)
             .await
-            .with_context(|| format!("read_dir {path}"))?;
+            .map_err(|source| TabletError::Io {
+                op: "read_dir",
+                path: path.to_string(),
+                source: IoSource::Local(source),
+            })?;
         let mut out = Vec::new();
-        while let Some(entry) = rd.next_entry().await? {
+        while let Some(entry) = rd
+            .next_entry()
+            .await
+            .map_err(|source| TabletError::Io {
+                op: "read_dir",
+                path: path.to_string(),
+                source: IoSource::Local(source),
+            })?
+        {
             let name = entry.file_name().to_string_lossy().into_owned();
-            let meta = entry.metadata().await?;
+            let entry_path = entry.path();
+            let meta = entry.metadata().await.map_err(|source| TabletError::Io {
+                op: "stat",
+                path: entry_path.display().to_string(),
+                source: IoSource::Local(source),
+            })?;
             out.push(RemoteEntry {
                 name,
                 metadata: into_remote_metadata(&meta),
@@ -271,30 +291,38 @@ impl TabletConnection for BackupConnection {
         Ok(out)
     }
 
-    async fn stat(&self, path: &str) -> anyhow::Result<RemoteMetadata> {
-        let meta = tokio::fs::metadata(path)
-            .await
-            .with_context(|| format!("stat {path}"))?;
+    async fn stat(&self, path: &str) -> Result<RemoteMetadata, TabletError> {
+        let meta = tokio::fs::metadata(path).await.map_err(|source| TabletError::Io {
+            op: "stat",
+            path: path.to_string(),
+            source: IoSource::Local(source),
+        })?;
         Ok(into_remote_metadata(&meta))
     }
 
-    async fn remove_file(&self, _path: &str) -> anyhow::Result<()> {
-        bail!("backup connection is read-only");
+    async fn remove_file(&self, _path: &str) -> Result<(), TabletError> {
+        Err(TabletError::BackupReadOnly { op: "remove_file" })
     }
 
-    async fn remove_dir_all(&self, _path: &str) -> anyhow::Result<()> {
-        bail!("backup connection is read-only");
+    async fn remove_dir_all(&self, _path: &str) -> Result<(), TabletError> {
+        Err(TabletError::BackupReadOnly {
+            op: "remove_dir_all",
+        })
     }
 
-    async fn execute(&self, _command: &str) -> anyhow::Result<String> {
-        bail!("backup connection cannot execute commands");
+    async fn execute(&self, _command: &str) -> Result<String, TabletError> {
+        Err(TabletError::BackupReadOnly { op: "execute" })
     }
 
-    async fn file_exists(&self, path: &str) -> anyhow::Result<bool> {
+    async fn file_exists(&self, path: &str) -> Result<bool, TabletError> {
         match tokio::fs::metadata(path).await {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(err) => Err(err).with_context(|| format!("stat {path}")),
+            Err(source) => Err(TabletError::Io {
+                op: "stat",
+                path: path.to_string(),
+                source: IoSource::Local(source),
+            }),
         }
     }
 }

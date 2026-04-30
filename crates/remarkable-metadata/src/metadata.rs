@@ -2,6 +2,8 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
+use crate::error::MetadataError;
+
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
@@ -288,19 +290,18 @@ pub struct DocumentEntry {
 
 impl DocumentEntry {
     /// # Errors
-    /// Returns an error when building a document entry without a parsed `.content` file.
+    /// Returns [`MetadataError::MissingContent`] when building a document entry
+    /// without a parsed `.content` file.
     pub fn from_raw(
         uuid: Uuid,
         raw: RawMetadata,
         content: Option<RawContent>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, MetadataError> {
         let kind = match raw.item_type {
             ItemType::Collection => ItemKind::Folder,
             ItemType::Template => ItemKind::Template,
             ItemType::Document => {
-                let content = content.ok_or_else(|| {
-                    anyhow::anyhow!("document {uuid} is missing a valid .content file")
-                })?;
+                let content = content.ok_or(MetadataError::MissingContent { uuid })?;
                 ItemKind::Document {
                     file_type: content.file_type,
                     page_count: content.effective_page_count(),
@@ -399,15 +400,23 @@ impl DocumentEntry {
 // ---------------------------------------------------------------------------
 
 /// # Errors
-/// Returns an error if `data` is not valid JSON or does not match the metadata schema.
-pub fn parse_metadata(data: &[u8]) -> anyhow::Result<RawMetadata> {
-    Ok(serde_json::from_slice(data)?)
+/// Returns [`MetadataError::Parse`] if `data` is not valid JSON or does not match
+/// the metadata schema.
+pub fn parse_metadata(data: &[u8]) -> Result<RawMetadata, MetadataError> {
+    serde_json::from_slice(data).map_err(|source| MetadataError::Parse {
+        what: "metadata",
+        source,
+    })
 }
 
 /// # Errors
-/// Returns an error if `data` is not valid JSON or does not match the content schema.
-pub fn parse_content(data: &[u8]) -> anyhow::Result<RawContent> {
-    Ok(serde_json::from_slice(data)?)
+/// Returns [`MetadataError::Parse`] if `data` is not valid JSON or does not match
+/// the content schema.
+pub fn parse_content(data: &[u8]) -> Result<RawContent, MetadataError> {
+    serde_json::from_slice(data).map_err(|source| MetadataError::Parse {
+        what: "content",
+        source,
+    })
 }
 
 /// Extract a UUID from a filename like `"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.metadata"`.

@@ -90,6 +90,13 @@ impl From<MetadataError> for CliError {
         match err {
             MetadataError::NotFound(msg) => Self::NotFound(msg),
             MetadataError::InvalidPath(msg) => Self::InvalidPath(msg),
+            // Tablet-data-shape failures (cycles, missing .content, JSON parse)
+            // are surfaced as IoError so the CLI keeps a single bucket for
+            // "the tablet's data is structurally wrong"; the Display impl on
+            // each MetadataError variant already includes the source chain.
+            other @ (MetadataError::Cycle { .. }
+            | MetadataError::MissingContent { .. }
+            | MetadataError::Parse { .. }) => Self::IoError(other.to_string()),
         }
     }
 }
@@ -97,9 +104,26 @@ impl From<MetadataError> for CliError {
 impl From<TabletError> for CliError {
     fn from(err: TabletError) -> Self {
         match err {
-            TabletError::ConnectionFailed(msg) => Self::ConnectionFailed(msg),
+            TabletError::ConnectTimeout { .. } | TabletError::Connect { .. } => {
+                Self::ConnectionFailed(err.to_string())
+            }
             TabletError::AuthFailed(msg) => Self::AuthFailed(msg),
-            TabletError::XochitlError(msg) => Self::XochitlError(msg),
+            TabletError::Xochitl(msg) => Self::XochitlError(msg),
+            TabletError::BackupReadOnly { .. } => Self::NotImplemented(err.to_string()),
+            // Pass nested MetadataError through its own From impl.
+            TabletError::Metadata(meta) => meta.into(),
+            // Everything else (filesystem I/O, ssh, JSON, parse, command
+            // shape, utf-8, mock setup) is "the tablet's data or transport
+            // went sideways" — bucket into IoError so the JSON envelope is
+            // consistent.
+            TabletError::Io { .. }
+            | TabletError::Ssh { .. }
+            | TabletError::CommandOutputNotUtf8 { .. }
+            | TabletError::CommandOutput { .. }
+            | TabletError::ParseInt { .. }
+            | TabletError::Json { .. }
+            | TabletError::NotJsonObject { .. }
+            | TabletError::Mock { .. } => Self::IoError(err.to_string()),
         }
     }
 }

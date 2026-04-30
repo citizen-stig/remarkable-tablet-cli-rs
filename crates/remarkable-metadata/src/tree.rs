@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::anyhow;
 use uuid::Uuid;
 
+use crate::error::MetadataError;
 use crate::metadata::{DocumentEntry, Parent};
 use crate::sort::SortField;
 
@@ -208,13 +208,13 @@ impl DocumentTree {
     /// `depth = Some(1)` means direct children only.
     ///
     /// # Errors
-    /// Returns an error if a folder cycle is detected during traversal.
+    /// Returns [`MetadataError::Cycle`] if a folder cycle is detected during traversal.
     pub fn list_recursive(
         &self,
         parent: &Parent,
         depth: Option<u32>,
         filter: ListFilter<'_>,
-    ) -> anyhow::Result<Vec<(u32, &DocumentEntry)>> {
+    ) -> Result<Vec<(u32, &DocumentEntry)>, MetadataError> {
         let mut result = Vec::new();
         let mut ancestors = HashSet::new();
         if let Parent::Folder(uuid) = parent {
@@ -237,7 +237,7 @@ impl DocumentTree {
         filter: ListFilter<'_>,
         ancestors: &mut HashSet<Uuid>,
         result: &mut Vec<(u32, &'a DocumentEntry)>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), MetadataError> {
         if let Some(max) = max_depth
             && current_depth >= max
         {
@@ -250,10 +250,7 @@ impl DocumentTree {
             }
             if entry.is_folder() {
                 if !ancestors.insert(entry.uuid) {
-                    return Err(anyhow!(
-                        "cycle detected while traversing folder UUID {}",
-                        entry.uuid
-                    ));
+                    return Err(MetadataError::Cycle { uuid: entry.uuid });
                 }
                 self.collect_recursive(
                     self.sorted_direct_children(&Parent::Folder(entry.uuid), filter),

@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use anyhow::{Context, anyhow, bail};
 use tempfile::TempDir;
 
 use super::{RemoteEntry, RemoteFileKind, RemoteMetadata, TabletConnection};
+use crate::error::{IoSource, TabletError};
 
 pub struct FakeConnection {
     root: TempDir,
@@ -141,18 +141,33 @@ impl Default for FakeConnection {
     }
 }
 
+/// Wrap an injected error message as a synthetic `io::Error` so test failures
+/// flow through the same `TabletError::Io` variant as a real local-fs error,
+/// rather than introducing a test-only enum variant.
+fn injected(message: &str) -> std::io::Error {
+    std::io::Error::other(message.to_string())
+}
+
 impl TabletConnection for FakeConnection {
-    async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>> {
+    async fn read_file(&self, path: &str) -> Result<Vec<u8>, TabletError> {
         if let Some(message) = self.read_errors.lock().unwrap().get(path).cloned() {
-            return Err(anyhow!(
-                "fake injected read_file error for {path}: {message}"
-            ));
+            return Err(TabletError::Io {
+                op: "read",
+                path: path.to_string(),
+                source: IoSource::Local(injected(&format!(
+                    "fake injected read_file error: {message}"
+                ))),
+            });
         }
         let p = self.local(path);
-        std::fs::read(&p).with_context(|| format!("fake read_file {}", p.display()))
+        std::fs::read(&p).map_err(|source| TabletError::Io {
+            op: "read",
+            path: p.display().to_string(),
+            source: IoSource::Local(source),
+        })
     }
 
-    async fn write_file(&self, path: &str, data: &[u8]) -> anyhow::Result<()> {
+    async fn write_file(&self, path: &str, data: &[u8]) -> Result<(), TabletError> {
         if let Some((suffix, message)) = self
             .write_error_suffixes
             .lock()
@@ -161,32 +176,57 @@ impl TabletConnection for FakeConnection {
             .find(|(suffix, _)| path.ends_with(suffix.as_str()))
             .cloned()
         {
-            return Err(anyhow!(
-                "fake injected write_file error for {path} matching suffix {suffix}: {message}"
-            ));
+            return Err(TabletError::Io {
+                op: "write",
+                path: path.to_string(),
+                source: IoSource::Local(injected(&format!(
+                    "fake injected write_file error matching suffix {suffix}: {message}"
+                ))),
+            });
         }
         let p = self.local(path);
         if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|source| TabletError::Io {
+                op: "create_dir",
+                path: parent.display().to_string(),
+                source: IoSource::Local(source),
+            })?;
         }
-        std::fs::write(&p, data).with_context(|| format!("fake write_file {}", p.display()))
+        std::fs::write(&p, data).map_err(|source| TabletError::Io {
+            op: "write",
+            path: p.display().to_string(),
+            source: IoSource::Local(source),
+        })
     }
 
-    async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<RemoteEntry>> {
+    async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, TabletError> {
         if let Some(message) = self.read_dir_errors.lock().unwrap().get(path).cloned() {
-            return Err(anyhow!(
-                "fake injected read_dir error for {path}: {message}"
-            ));
+            return Err(TabletError::Io {
+                op: "read_dir",
+                path: path.to_string(),
+                source: IoSource::Local(injected(&format!(
+                    "fake injected read_dir error: {message}"
+                ))),
+            });
         }
         let p = self.local(path);
-        let entries =
-            std::fs::read_dir(&p).with_context(|| format!("fake read_dir {}", p.display()))?;
+        let entries = std::fs::read_dir(&p).map_err(|source| TabletError::Io {
+            op: "read_dir",
+            path: p.display().to_string(),
+            source: IoSource::Local(source),
+        })?;
         let mut out = Vec::new();
         for e in entries {
-            let e = e?;
-            let meta = e
-                .metadata()
-                .with_context(|| format!("fake read_dir metadata for {}", e.path().display()))?;
+            let e = e.map_err(|source| TabletError::Io {
+                op: "read_dir",
+                path: p.display().to_string(),
+                source: IoSource::Local(source),
+            })?;
+            let meta = e.metadata().map_err(|source| TabletError::Io {
+                op: "stat",
+                path: e.path().display().to_string(),
+                source: IoSource::Local(source),
+            })?;
             out.push(RemoteEntry {
                 name: e.file_name().to_string_lossy().into_owned(),
                 metadata: into_remote_metadata(&meta),
@@ -196,31 +236,47 @@ impl TabletConnection for FakeConnection {
         Ok(out)
     }
 
-    async fn stat(&self, path: &str) -> anyhow::Result<RemoteMetadata> {
+    async fn stat(&self, path: &str) -> Result<RemoteMetadata, TabletError> {
         let p = self.local(path);
-        let meta = std::fs::metadata(&p).with_context(|| format!("fake stat {}", p.display()))?;
+        let meta = std::fs::metadata(&p).map_err(|source| TabletError::Io {
+            op: "stat",
+            path: p.display().to_string(),
+            source: IoSource::Local(source),
+        })?;
         Ok(into_remote_metadata(&meta))
     }
 
-    async fn remove_file(&self, path: &str) -> anyhow::Result<()> {
+    async fn remove_file(&self, path: &str) -> Result<(), TabletError> {
         if let Some(message) = self.remove_errors.lock().unwrap().get(path).cloned() {
-            return Err(anyhow!(
-                "fake injected remove_file error for {path}: {message}"
-            ));
+            return Err(TabletError::Io {
+                op: "remove_file",
+                path: path.to_string(),
+                source: IoSource::Local(injected(&format!(
+                    "fake injected remove_file error: {message}"
+                ))),
+            });
         }
         let p = self.local(path);
-        std::fs::remove_file(&p).with_context(|| format!("fake remove_file {}", p.display()))
+        std::fs::remove_file(&p).map_err(|source| TabletError::Io {
+            op: "remove_file",
+            path: p.display().to_string(),
+            source: IoSource::Local(source),
+        })
     }
 
-    async fn remove_dir_all(&self, path: &str) -> anyhow::Result<()> {
+    async fn remove_dir_all(&self, path: &str) -> Result<(), TabletError> {
         let p = self.local(path);
         if !p.exists() {
             return Ok(());
         }
-        std::fs::remove_dir_all(&p).with_context(|| format!("fake remove_dir_all {}", p.display()))
+        std::fs::remove_dir_all(&p).map_err(|source| TabletError::Io {
+            op: "remove_dir",
+            path: p.display().to_string(),
+            source: IoSource::Local(source),
+        })
     }
 
-    async fn execute(&self, command: &str) -> anyhow::Result<String> {
+    async fn execute(&self, command: &str) -> Result<String, TabletError> {
         self.executed_commands
             .lock()
             .unwrap()
@@ -231,10 +287,15 @@ impl TabletConnection for FakeConnection {
                 return Ok(output.clone());
             }
         }
-        bail!("fake execute: no registered output for command `{command}`")
+        // The fake doesn't model an actual shell — an unregistered command is
+        // a test-setup omission, surfaced as the dedicated `Mock` variant so
+        // the CLI doesn't mis-categorize it as an xochitl service failure.
+        Err(TabletError::Mock {
+            command: command.to_string(),
+        })
     }
 
-    async fn file_exists(&self, path: &str) -> anyhow::Result<bool> {
+    async fn file_exists(&self, path: &str) -> Result<bool, TabletError> {
         Ok(self.local(path).exists())
     }
 }

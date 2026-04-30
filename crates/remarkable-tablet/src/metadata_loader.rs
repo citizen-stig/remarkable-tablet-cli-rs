@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
 use futures::stream::{self, StreamExt, TryStreamExt};
 
 use crate::connection::TabletConnection;
+use crate::error::TabletError;
 use remarkable_metadata::metadata::{self, DocumentEntry};
 
 /// Maximum concurrent SFTP read requests during metadata loading.
@@ -43,7 +43,7 @@ pub struct LoadDiagnostics {
 pub async fn load_all_metadata<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
-) -> anyhow::Result<Vec<DocumentEntry>> {
+) -> Result<Vec<DocumentEntry>, TabletError> {
     Ok(load_all_metadata_full(conn, data_dir).await?.0)
 }
 
@@ -56,14 +56,11 @@ pub async fn load_all_metadata<C: TabletConnection>(
 pub async fn load_all_metadata_full<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
-) -> anyhow::Result<(Vec<DocumentEntry>, LoadDiagnostics)> {
+) -> Result<(Vec<DocumentEntry>, LoadDiagnostics), TabletError> {
     let mut diag = LoadDiagnostics::default();
 
     let list_start = Instant::now();
-    let dir_entries = conn
-        .read_dir(data_dir)
-        .await
-        .with_context(|| format!("list {data_dir}"))?;
+    let dir_entries = conn.read_dir(data_dir).await?;
     diag.list_dir_elapsed = list_start.elapsed();
     diag.dir_entry_count = dir_entries.len();
 
@@ -106,12 +103,12 @@ async fn load_one<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
     uuid: uuid::Uuid,
-) -> anyhow::Result<LoadOutcome> {
+) -> Result<LoadOutcome, TabletError> {
     let meta_path = format!("{data_dir}/{uuid}.metadata");
     let content_path = format!("{data_dir}/{uuid}.content");
     let (meta_res, content_res) =
         tokio::join!(conn.read_file(&meta_path), conn.read_file(&content_path));
-    let meta_bytes = meta_res.with_context(|| format!("read {meta_path}"))?;
+    let meta_bytes = meta_res?;
     let raw = match metadata::parse_metadata(&meta_bytes) {
         Ok(metadata) => metadata,
         Err(err) => {
@@ -125,7 +122,7 @@ async fn load_one<C: TabletConnection>(
     let content = if raw.item_type == remarkable_metadata::metadata::ItemType::Document {
         let bytes = match content_res {
             Ok(bytes) => bytes,
-            Err(err) => return Ok(LoadOutcome::ContentReadFail(uuid, format!("{err:#}"))),
+            Err(err) => return Ok(LoadOutcome::ContentReadFail(uuid, err.to_string())),
         };
         match metadata::parse_content(&bytes) {
             Ok(content) => Some(content),

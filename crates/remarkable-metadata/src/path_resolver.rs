@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use anyhow::anyhow;
 use uuid::Uuid;
 
 use crate::error::MetadataError;
@@ -24,11 +23,17 @@ const RESERVED_TRASH_PATH_MSG: &str =
 /// - Each path segment is matched against `visible_name` at the current level.
 ///
 /// # Errors
-/// Returns an error if `path` does not start with `'/'`, a segment has no match,
+/// Returns [`MetadataError::InvalidPath`] if `path` does not start with `'/'`,
 /// an intermediate segment is not a folder, or two siblings share the same name.
-pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Resolved<'a>> {
+/// Returns [`MetadataError::NotFound`] if a segment has no match.
+pub fn resolve_path<'a>(
+    tree: &'a DocumentTree,
+    path: &str,
+) -> Result<Resolved<'a>, MetadataError> {
     if !path.starts_with('/') {
-        return Err(MetadataError::InvalidPath(format!("path must start with '/': {path}")).into());
+        return Err(MetadataError::InvalidPath(format!(
+            "path must start with '/': {path}"
+        )));
     }
 
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -40,8 +45,7 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
         if segments.len() == 1 {
             return Err(MetadataError::InvalidPath(
                 "'/trash' is a virtual container; specify an item path under it".to_string(),
-            )
-            .into());
+            ));
         }
         (Parent::Trash, 1)
     } else {
@@ -67,7 +71,7 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
                     msg.push_str("\n  did you mean: ");
                     msg.push_str(&suggestions.join(", "));
                 }
-                return Err(MetadataError::NotFound(msg).into());
+                return Err(MetadataError::NotFound(msg));
             }
             ChildLookup::Entry(entry) => {
                 if is_leaf {
@@ -75,17 +79,16 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> anyhow::Result<Re
                 }
                 // Intermediate segments must be folders
                 if !entry.is_folder() {
-                    return Err(
-                        MetadataError::InvalidPath(format!("'{segment}' is not a folder")).into(),
-                    );
+                    return Err(MetadataError::InvalidPath(format!(
+                        "'{segment}' is not a folder"
+                    )));
                 }
                 current_parent = Parent::Folder(entry.uuid);
             }
             ChildLookup::Ambiguous => {
                 return Err(MetadataError::InvalidPath(format!(
                     "ambiguous: multiple items named '{segment}' in the same folder — use a UUID instead"
-                ))
-                .into());
+                )));
             }
         }
     }
@@ -209,9 +212,9 @@ pub fn ensure_not_reserved_trash_path(
     tree: &DocumentTree,
     parent: &Parent,
     name: &str,
-) -> anyhow::Result<()> {
+) -> Result<(), MetadataError> {
     if would_create_reserved_trash_path(tree, parent, name) {
-        return Err(MetadataError::InvalidPath(RESERVED_TRASH_PATH_MSG.to_string()).into());
+        return Err(MetadataError::InvalidPath(RESERVED_TRASH_PATH_MSG.to_string()));
     }
     Ok(())
 }
@@ -248,15 +251,16 @@ fn would_create_reserved_trash_path(tree: &DocumentTree, parent: &Parent, name: 
 /// Resolve a UUID to its full human-readable path (e.g., `"/Work/Meeting Notes"`).
 ///
 /// # Errors
-/// Returns an error if `uuid` is not in the tree or its parent chain is cyclic.
-pub fn resolve_uuid_to_path(tree: &DocumentTree, uuid: &Uuid) -> anyhow::Result<String> {
+/// Returns [`MetadataError::NotFound`] if `uuid` is not in the tree, or
+/// [`MetadataError::Cycle`] if its parent chain is cyclic.
+pub fn resolve_uuid_to_path(tree: &DocumentTree, uuid: &Uuid) -> Result<String, MetadataError> {
     if tree.get(uuid).is_none() {
-        return Err(MetadataError::NotFound(format!("UUID {uuid} not found")).into());
+        return Err(MetadataError::NotFound(format!("UUID {uuid} not found")));
     }
 
     tree.display_path(uuid)
         .map(str::to_string)
-        .ok_or_else(|| anyhow!("cyclic parent chain while resolving UUID {uuid}"))
+        .ok_or(MetadataError::Cycle { uuid: *uuid })
 }
 
 /// Accept either a UUID or a human path and resolve it.
@@ -266,9 +270,10 @@ pub fn resolve_uuid_to_path(tree: &DocumentTree, uuid: &Uuid) -> anyhow::Result<
 /// `"/"` always resolves to `Resolved::Root`.
 ///
 /// # Errors
-/// Returns an error if `input` is a syntactically valid UUID that is not in the tree,
-/// or if it is a path that fails to resolve (see [`resolve_path`]).
-pub fn resolve<'a>(tree: &'a DocumentTree, input: &str) -> anyhow::Result<Resolved<'a>> {
+/// Returns [`MetadataError::NotFound`] if `input` is a syntactically valid UUID
+/// that is not in the tree, or whatever [`resolve_path`] returns when `input` is
+/// a path.
+pub fn resolve<'a>(tree: &'a DocumentTree, input: &str) -> Result<Resolved<'a>, MetadataError> {
     if input == "/" {
         return Ok(Resolved::Root);
     }
@@ -278,7 +283,7 @@ pub fn resolve<'a>(tree: &'a DocumentTree, input: &str) -> anyhow::Result<Resolv
         if let Some(entry) = tree.get(&uuid) {
             return Ok(Resolved::Entry(entry));
         }
-        return Err(MetadataError::NotFound(format!("UUID {uuid} not found")).into());
+        return Err(MetadataError::NotFound(format!("UUID {uuid} not found")));
     }
 
     // Fall back to path resolution
@@ -418,18 +423,19 @@ mod tests {
     #[test]
     fn resolve_not_found() {
         let tree = sample_tree();
-        let err = resolve_path(&tree, "/Nonexistent").unwrap_err();
-        assert!(err.downcast_ref::<MetadataError>().is_some());
+        assert!(matches!(
+            resolve_path(&tree, "/Nonexistent").unwrap_err(),
+            MetadataError::NotFound(_)
+        ));
     }
 
     #[test]
     fn resolve_nested_not_found() {
         let tree = sample_tree();
         let err = resolve_path(&tree, "/Work/Nonexistent").unwrap_err();
-        let cli_err = err.downcast_ref::<MetadataError>().unwrap();
-        match cli_err {
+        match &err {
             MetadataError::NotFound(msg) => assert!(msg.contains("Nonexistent")),
-            MetadataError::InvalidPath(_) => panic!("expected NotFound, got {cli_err:?}"),
+            other => panic!("expected NotFound, got {other:?}"),
         }
     }
 
@@ -437,16 +443,14 @@ mod tests {
     fn resolve_path_through_document_fails() {
         let tree = sample_tree();
         let err = resolve_path(&tree, "/Quick Note/child").unwrap_err();
-        let cli_err = err.downcast_ref::<MetadataError>().unwrap();
-        assert!(matches!(cli_err, MetadataError::InvalidPath(_)));
+        assert!(matches!(err, MetadataError::InvalidPath(_)));
     }
 
     #[test]
     fn resolve_no_leading_slash() {
         let tree = sample_tree();
         let err = resolve_path(&tree, "Work").unwrap_err();
-        let cli_err = err.downcast_ref::<MetadataError>().unwrap();
-        assert!(matches!(cli_err, MetadataError::InvalidPath(_)));
+        assert!(matches!(err, MetadataError::InvalidPath(_)));
     }
 
     #[test]
@@ -469,8 +473,7 @@ mod tests {
         ];
         let tree = DocumentTree::build(entries);
         let err = resolve_path(&tree, "/Same Name").unwrap_err();
-        let cli_err = err.downcast_ref::<MetadataError>().unwrap();
-        assert!(matches!(cli_err, MetadataError::InvalidPath(_)));
+        assert!(matches!(err, MetadataError::InvalidPath(_)));
     }
 
     #[test]
@@ -485,8 +488,10 @@ mod tests {
     #[test]
     fn resolve_by_uuid_not_found() {
         let tree = sample_tree();
-        let err = resolve(&tree, "99999999-9999-9999-9999-999999999999").unwrap_err();
-        assert!(err.downcast_ref::<MetadataError>().is_some());
+        assert!(matches!(
+            resolve(&tree, "99999999-9999-9999-9999-999999999999").unwrap_err(),
+            MetadataError::NotFound(_)
+        ));
     }
 
     #[test]
@@ -551,8 +556,7 @@ mod tests {
     fn resolve_trash_container_path_is_invalid() {
         let tree = sample_tree();
         let err = resolve_path(&tree, "/trash").unwrap_err();
-        let cli_err = err.downcast_ref::<MetadataError>().unwrap();
-        assert!(matches!(cli_err, MetadataError::InvalidPath(_)));
+        assert!(matches!(err, MetadataError::InvalidPath(_)));
     }
 
     #[test]
@@ -738,10 +742,7 @@ mod tests {
             Some(FileType::Pdf),
         )]);
         let err = resolve_path(&tree, "/Report.epub").unwrap_err();
-        assert!(matches!(
-            err.downcast_ref::<MetadataError>().unwrap(),
-            MetadataError::NotFound(_)
-        ));
+        assert!(matches!(err, MetadataError::NotFound(_)));
     }
 
     #[test]
@@ -763,10 +764,7 @@ mod tests {
             ),
         ]);
         let bare = resolve_path(&tree, "/Notes").unwrap_err();
-        assert!(matches!(
-            bare.downcast_ref::<MetadataError>().unwrap(),
-            MetadataError::InvalidPath(_)
-        ));
+        assert!(matches!(bare, MetadataError::InvalidPath(_)));
         match resolve_path(&tree, "/Notes.pdf") {
             Ok(Resolved::Entry(e)) => assert_eq!(e.uuid, Uuid::parse_str(DOC_1).unwrap()),
             other => panic!("expected Pdf entry, got {other:?}"),
@@ -790,10 +788,7 @@ mod tests {
             Some(FileType::Pdf),
         )]);
         let err = resolve_path(&tree, "/Work.pdf/anything").unwrap_err();
-        assert!(matches!(
-            err.downcast_ref::<MetadataError>().unwrap(),
-            MetadataError::NotFound(_)
-        ));
+        assert!(matches!(err, MetadataError::NotFound(_)));
     }
 
     #[test]
@@ -806,17 +801,14 @@ mod tests {
             Some(FileType::Pdf),
         )]);
         let err = resolve_path(&tree, "/Report.txt").unwrap_err();
-        assert!(matches!(
-            err.downcast_ref::<MetadataError>().unwrap(),
-            MetadataError::NotFound(_)
-        ));
+        assert!(matches!(err, MetadataError::NotFound(_)));
     }
 
     #[test]
     fn not_found_error_includes_suggestions() {
         let tree = sample_tree();
         let err = resolve_path(&tree, "/Work/Meting Notes").unwrap_err();
-        let msg = err.downcast_ref::<MetadataError>().unwrap().to_string();
+        let msg = err.to_string();
         assert!(
             msg.contains("did you mean"),
             "expected suggestion line, got: {msg}"
@@ -831,7 +823,7 @@ mod tests {
     fn suggestion_formats_folders_with_trailing_slash() {
         let tree = sample_tree();
         let err = resolve_path(&tree, "/Wrk").unwrap_err();
-        let msg = err.downcast_ref::<MetadataError>().unwrap().to_string();
+        let msg = err.to_string();
         assert!(
             msg.contains("Work/"),
             "expected folder suggestion, got: {msg}"

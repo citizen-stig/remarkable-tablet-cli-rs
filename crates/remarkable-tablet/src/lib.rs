@@ -17,7 +17,7 @@ pub use connection::FakeConnection;
 pub use connection::{
     ConnectOptions, RemoteEntry, RemoteFileKind, RemoteMetadata, SshConnection, TabletConnection,
 };
-pub use error::TabletError;
+pub use error::{IoSource, TabletError};
 pub use metadata_loader::{LoadDiagnostics, load_all_metadata, load_all_metadata_full};
 pub use tablet::{
     ConnectionType, DeviceInfo, fetch_device_info, start_xochitl, stop_xochitl, update_metadata,

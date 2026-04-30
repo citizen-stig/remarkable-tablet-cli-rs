@@ -15,10 +15,10 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use anyhow::Context;
 use futures::stream::{self, StreamExt, TryStreamExt};
 
 use crate::connection::{RemoteFileKind, TabletConnection};
+use crate::error::{IoSource, TabletError};
 
 /// Concurrency for SFTP reads when fanning out a directory walk or a
 /// batch of file downloads. Matches `metadata_loader::READ_CONCURRENCY`
@@ -50,7 +50,7 @@ pub struct WalkedFile {
 pub async fn walk_remote<C: TabletConnection>(
     conn: &C,
     root: &str,
-) -> anyhow::Result<Vec<WalkedFile>> {
+) -> Result<Vec<WalkedFile>, TabletError> {
     let root = root.trim_end_matches('/').to_string();
     let mut files = Vec::new();
     let mut frontier: Vec<(String, PathBuf)> = vec![(root, PathBuf::new())];
@@ -58,11 +58,8 @@ pub async fn walk_remote<C: TabletConnection>(
     while !frontier.is_empty() {
         let listings: Vec<(PathBuf, String, Vec<crate::connection::RemoteEntry>)> =
             stream::iter(frontier.drain(..).map(|(remote, rel)| async move {
-                let entries = conn
-                    .read_dir(&remote)
-                    .await
-                    .with_context(|| format!("walk read_dir {remote}"))?;
-                Ok::<_, anyhow::Error>((rel, remote, entries))
+                let entries = conn.read_dir(&remote).await?;
+                Ok::<_, TabletError>((rel, remote, entries))
             }))
             .buffer_unordered(TRANSFER_CONCURRENCY)
             .try_collect()
@@ -107,21 +104,26 @@ pub async fn download_file<C: TabletConnection>(
     conn: &C,
     remote: &str,
     local: impl AsRef<Path>,
-) -> anyhow::Result<u64> {
-    let bytes = conn
-        .read_file(remote)
-        .await
-        .with_context(|| format!("read remote {remote}"))?;
+) -> Result<u64, TabletError> {
+    let bytes = conn.read_file(remote).await?;
     let local = local.as_ref();
     if let Some(parent) = local.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .with_context(|| format!("create parent dir {}", parent.display()))?;
+            .map_err(|source| TabletError::Io {
+                op: "create_dir",
+                path: parent.display().to_string(),
+                source: IoSource::Local(source),
+            })?;
     }
     let len = bytes.len() as u64;
     tokio::fs::write(local, &bytes)
         .await
-        .with_context(|| format!("write local {}", local.display()))?;
+        .map_err(|source| TabletError::Io {
+            op: "write",
+            path: local.display().to_string(),
+            source: IoSource::Local(source),
+        })?;
     Ok(len)
 }
 
@@ -135,15 +137,17 @@ pub async fn upload_file<C: TabletConnection>(
     conn: &C,
     local: impl AsRef<Path>,
     remote: &str,
-) -> anyhow::Result<u64> {
+) -> Result<u64, TabletError> {
     let local = local.as_ref();
     let bytes = tokio::fs::read(local)
         .await
-        .with_context(|| format!("read local {}", local.display()))?;
+        .map_err(|source| TabletError::Io {
+            op: "read",
+            path: local.display().to_string(),
+            source: IoSource::Local(source),
+        })?;
     let len = bytes.len() as u64;
-    conn.write_file(remote, &bytes)
-        .await
-        .with_context(|| format!("write remote {remote}"))?;
+    conn.write_file(remote, &bytes).await?;
     Ok(len)
 }
 
@@ -155,7 +159,7 @@ pub async fn upload_file<C: TabletConnection>(
 pub async fn download_many<C: TabletConnection>(
     conn: &C,
     jobs: Vec<(String, PathBuf)>,
-) -> anyhow::Result<u64> {
+) -> Result<u64, TabletError> {
     let totals: Vec<u64> = stream::iter(
         jobs.into_iter()
             .map(|(remote, local)| async move { download_file(conn, &remote, &local).await }),

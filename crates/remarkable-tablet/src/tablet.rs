@@ -1,6 +1,5 @@
 use std::fmt;
 
-use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
 
 use crate::connection::TabletConnection;
@@ -53,12 +52,12 @@ pub struct DeviceInfo {
 }
 
 /// # Errors
-/// Returns an error if any of the firmware, battery, or disk-stat shell calls fails.
+/// Returns the first error from concurrent firmware, battery, or disk-stat fetches.
 pub async fn fetch_device_info<C: TabletConnection>(
     conn: &C,
     host: &str,
     data_dir: &str,
-) -> anyhow::Result<DeviceInfo> {
+) -> Result<DeviceInfo, TabletError> {
     let (firmware_version, battery_percent, (disk_total_mb, disk_used_mb, disk_free_mb)) = tokio::try_join!(
         fetch_firmware(conn),
         fetch_battery(conn),
@@ -80,11 +79,11 @@ pub async fn fetch_device_info<C: TabletConnection>(
 /// over them or read a half-written tree.
 ///
 /// # Errors
-/// Returns [`TabletError::XochitlError`] if the SSH command fails.
-pub async fn stop_xochitl<C: TabletConnection>(conn: &C) -> anyhow::Result<()> {
+/// Returns [`TabletError::Xochitl`] if the SSH command fails.
+pub async fn stop_xochitl<C: TabletConnection>(conn: &C) -> Result<(), TabletError> {
     conn.execute("systemctl stop xochitl")
         .await
-        .map_err(|e| TabletError::XochitlError(format!("stop xochitl: {e:#}")))?;
+        .map_err(|e| TabletError::Xochitl(format!("stop xochitl: {e}")))?;
     Ok(())
 }
 
@@ -93,11 +92,11 @@ pub async fn stop_xochitl<C: TabletConnection>(conn: &C) -> anyhow::Result<()> {
 /// `restart` command's job (SPEC §3.15).
 ///
 /// # Errors
-/// Returns [`TabletError::XochitlError`] if the SSH command fails.
-pub async fn start_xochitl<C: TabletConnection>(conn: &C) -> anyhow::Result<()> {
+/// Returns [`TabletError::Xochitl`] if the SSH command fails.
+pub async fn start_xochitl<C: TabletConnection>(conn: &C) -> Result<(), TabletError> {
     conn.execute("systemctl start xochitl")
         .await
-        .map_err(|e| TabletError::XochitlError(format!("start xochitl: {e:#}")))?;
+        .map_err(|e| TabletError::Xochitl(format!("start xochitl: {e}")))?;
     Ok(())
 }
 
@@ -109,15 +108,18 @@ pub async fn start_xochitl<C: TabletConnection>(conn: &C) -> anyhow::Result<()> 
 ///
 /// # Errors
 /// Returns the first failure of: stop, `work`, or restart (in that order
-/// of priority).
-pub async fn with_xochitl_stopped<C, T, Fut>(
+/// of priority). The error type is generic so callers using `anyhow::Error`
+/// or any other error type that admits `From<TabletError>` can pass a `work`
+/// future returning their own error type.
+pub async fn with_xochitl_stopped<C, T, E, Fut>(
     conn: &C,
     no_restart: bool,
     work: impl FnOnce() -> Fut,
-) -> anyhow::Result<T>
+) -> Result<T, E>
 where
     C: TabletConnection,
-    Fut: std::future::Future<Output = anyhow::Result<T>>,
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: From<TabletError>,
 {
     stop_xochitl(conn).await?;
     let work_result = work().await;
@@ -144,84 +146,87 @@ pub async fn update_metadata<C: TabletConnection>(
     conn: &C,
     path: &str,
     f: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
-) -> anyhow::Result<()> {
+) -> Result<(), TabletError> {
     let raw = conn.read_file(path).await?;
     let mut json: serde_json::Value =
-        serde_json::from_slice(&raw).with_context(|| format!("parse metadata json: {path}"))?;
-    let obj = json
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("metadata is not a JSON object: {path}"))?;
+        serde_json::from_slice(&raw).map_err(|source| TabletError::Json {
+            path: path.to_string(),
+            source,
+        })?;
+    let obj = json.as_object_mut().ok_or_else(|| TabletError::NotJsonObject {
+        path: path.to_string(),
+    })?;
     f(obj);
-    conn.write_file(path, &serde_json::to_vec(&json)?).await?;
+    let bytes = serde_json::to_vec(&json).map_err(|source| TabletError::Json {
+        path: path.to_string(),
+        source,
+    })?;
+    conn.write_file(path, &bytes).await?;
     Ok(())
 }
 
-async fn fetch_firmware<C: TabletConnection>(conn: &C) -> anyhow::Result<String> {
-    let bytes = conn
-        .read_file("/etc/version")
-        .await
-        .context("read /etc/version")?;
-    let s = String::from_utf8(bytes).context("/etc/version not UTF-8")?;
+async fn fetch_firmware<C: TabletConnection>(conn: &C) -> Result<String, TabletError> {
+    let bytes = conn.read_file("/etc/version").await?;
+    let s = String::from_utf8(bytes)
+        .map_err(|source| TabletError::CommandOutputNotUtf8 { source })?;
     Ok(s.trim().to_string())
 }
 
-async fn fetch_battery<C: TabletConnection>(conn: &C) -> anyhow::Result<u32> {
+async fn fetch_battery<C: TabletConnection>(conn: &C) -> Result<u32, TabletError> {
     let root = "/sys/class/power_supply";
-    let entries = conn
-        .read_dir(root)
-        .await
-        .with_context(|| format!("list {root}"))?;
-    let mut last_err: Option<anyhow::Error> = None;
+    let entries = conn.read_dir(root).await?;
+    let mut last_err: Option<TabletError> = None;
     for entry in entries {
         let cap_path = format!("{root}/{}/capacity", entry.name);
         match conn.read_file(&cap_path).await {
             Ok(raw) => {
-                let s = String::from_utf8(raw).context("capacity not UTF-8")?;
-                return s
-                    .trim()
-                    .parse::<u32>()
-                    .with_context(|| format!("parse capacity `{}`", s.trim()));
+                let s = String::from_utf8(raw)
+                    .map_err(|source| TabletError::CommandOutputNotUtf8 { source })?;
+                return s.trim().parse::<u32>().map_err(|source| TabletError::ParseInt {
+                    what: format!("battery capacity `{}`", s.trim()),
+                    source,
+                });
             }
-            Err(err) => last_err = Some(err.context(format!("read {cap_path}"))),
+            Err(err) => last_err = Some(err),
         }
     }
-    match last_err {
-        Some(err) => Err(err.context(format!("no readable battery under {root}"))),
-        None => bail!("no battery found under {root}"),
-    }
+    Err(last_err.unwrap_or_else(|| TabletError::CommandOutput {
+        command: format!("ls {root}"),
+        message: "no battery found".to_string(),
+    }))
 }
 
 async fn fetch_disk<C: TabletConnection>(
     conn: &C,
     data_dir: &str,
-) -> anyhow::Result<(u64, u64, u64)> {
+) -> Result<(u64, u64, u64), TabletError> {
     let escaped = shell_single_quote(data_dir);
     let cmd = format!("df -k {escaped}");
-    let out = conn
-        .execute(&cmd)
-        .await
-        .with_context(|| format!("run `{cmd}`"))?;
+    let out = conn.execute(&cmd).await?;
     let mut lines = out.lines();
     let _header = lines.next();
     let rest: String = lines.collect::<Vec<_>>().join(" ");
     let fields: Vec<&str> = rest.split_whitespace().collect();
     if fields.len() < 4 {
-        return Err(anyhow!("unexpected `df -k` output: {out:?}"));
+        return Err(TabletError::CommandOutput {
+            command: cmd,
+            message: format!("unexpected output: {out:?}"),
+        });
     }
 
+    let parse_field = |field: &str, fallback: &str, what: &str| -> Result<u64, TabletError> {
+        field
+            .parse::<u64>()
+            .or_else(|_| fallback.parse::<u64>())
+            .map_err(|source| TabletError::ParseInt {
+                what: format!("{what} from `df` output: {out:?}"),
+                source,
+            })
+    };
     let n = fields.len();
-    let total_k: u64 = fields[n - 5]
-        .parse()
-        .or_else(|_| fields[1].parse())
-        .with_context(|| format!("parse total from `df` output: {out:?}"))?;
-    let used_k: u64 = fields[n - 4]
-        .parse()
-        .or_else(|_| fields[2].parse())
-        .with_context(|| format!("parse used from `df` output: {out:?}"))?;
-    let free_k: u64 = fields[n - 3]
-        .parse()
-        .or_else(|_| fields[3].parse())
-        .with_context(|| format!("parse free from `df` output: {out:?}"))?;
+    let total_k = parse_field(fields[n - 5], fields[1], "total")?;
+    let used_k = parse_field(fields[n - 4], fields[2], "used")?;
+    let free_k = parse_field(fields[n - 3], fields[3], "free")?;
     Ok((total_k / 1024, used_k / 1024, free_k / 1024))
 }
 
@@ -302,7 +307,7 @@ mod tests {
         let conn = FakeConnection::new();
         register_xochitl(&conn);
 
-        let value = with_xochitl_stopped(&conn, false, || async { Ok::<_, anyhow::Error>(42) })
+        let value = with_xochitl_stopped(&conn, false, || async { Ok::<_, TabletError>(42) })
             .await
             .unwrap();
         assert_eq!(value, 42);
@@ -322,7 +327,7 @@ mod tests {
         let conn = FakeConnection::new();
         register_xochitl(&conn);
 
-        with_xochitl_stopped(&conn, true, || async { Ok::<_, anyhow::Error>(()) })
+        with_xochitl_stopped(&conn, true, || async { Ok::<_, TabletError>(()) })
             .await
             .unwrap();
 
@@ -336,7 +341,7 @@ mod tests {
         register_xochitl(&conn);
 
         let err = with_xochitl_stopped(&conn, false, || async {
-            Err::<(), _>(anyhow!("work blew up"))
+            Err::<(), TabletError>(TabletError::Xochitl("work blew up".to_string()))
         })
         .await
         .unwrap_err();
@@ -353,7 +358,7 @@ mod tests {
         // `start` is intentionally not registered → the fake returns an error.
 
         let err = with_xochitl_stopped(&conn, false, || async {
-            Err::<(), _>(anyhow!("primary failure"))
+            Err::<(), TabletError>(TabletError::Xochitl("primary failure".to_string()))
         })
         .await
         .unwrap_err();

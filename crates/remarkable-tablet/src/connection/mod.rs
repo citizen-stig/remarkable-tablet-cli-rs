@@ -1,5 +1,7 @@
 use std::time::SystemTime;
 
+use crate::error::TabletError;
+
 #[cfg(feature = "test-utils")]
 pub mod fake;
 pub mod ssh;
@@ -47,18 +49,18 @@ pub struct RemoteEntry {
 /// bytes on Unix, UCS-2 on Windows) that don't apply to remote paths.
 #[allow(async_fn_in_trait)] // crate-internal trait; Send bounds not needed
 pub trait TabletConnection {
-    async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>>;
+    async fn read_file(&self, path: &str) -> Result<Vec<u8>, TabletError>;
     // TODO: for larger files we might prefer a buffer or stream; revisit when
     // upload/download commands grow streaming requirements.
-    async fn write_file(&self, path: &str, data: &[u8]) -> anyhow::Result<()>;
-    async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<RemoteEntry>>;
-    async fn stat(&self, path: &str) -> anyhow::Result<RemoteMetadata>;
-    async fn remove_file(&self, path: &str) -> anyhow::Result<()>;
+    async fn write_file(&self, path: &str, data: &[u8]) -> Result<(), TabletError>;
+    async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, TabletError>;
+    async fn stat(&self, path: &str) -> Result<RemoteMetadata, TabletError>;
+    async fn remove_file(&self, path: &str) -> Result<(), TabletError>;
     /// Recursively remove a directory and everything under it. No-op if the
     /// path doesn't exist (matches `rm -rf`'s contract). Used by `rm
     /// --permanent` to wipe per-notebook page directories and thumbnail
     /// directories that accumulate under a UUID.
-    async fn remove_dir_all(&self, path: &str) -> anyhow::Result<()>;
-    async fn execute(&self, command: &str) -> anyhow::Result<String>;
-    async fn file_exists(&self, path: &str) -> anyhow::Result<bool>;
+    async fn remove_dir_all(&self, path: &str) -> Result<(), TabletError>;
+    async fn execute(&self, command: &str) -> Result<String, TabletError>;
+    async fn file_exists(&self, path: &str) -> Result<bool, TabletError>;
 }

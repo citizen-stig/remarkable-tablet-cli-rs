@@ -16,7 +16,7 @@ const LAYERS: &[u8] = include_bytes!("fixtures/layers.rm");
 fn render_default(bytes: &[u8]) -> Pixmap {
     let page = parse_page(bytes).expect("fixture parses");
     let opts = RenderOptions::for_page(&page);
-    let png = render_page(&page, &opts).expect("render succeeds");
+    let png = render_page(&page, opts).expect("render succeeds");
     Pixmap::decode_png(&png).expect("PNG round-trips")
 }
 
@@ -76,7 +76,7 @@ fn layers_renders_all_three() {
 fn dimensions_track_paper_size() {
     let page = parse_page(SMOKE).unwrap();
     let opts = RenderOptions::for_page(&page);
-    let png = render_page(&page, &opts).unwrap();
+    let png = render_page(&page, opts).unwrap();
     let pixmap = Pixmap::decode_png(&png).unwrap();
     let (expected_w, expected_h) = page.paper_size.expect("smoke has paper size");
     assert_eq!(pixmap.width(), expected_w);
@@ -90,7 +90,7 @@ fn explicit_options_override_paper_size() {
         width: 702,
         height: 936,
     };
-    let png = render_page(&page, &opts).unwrap();
+    let png = render_page(&page, opts).unwrap();
     let pixmap = Pixmap::decode_png(&png).unwrap();
     assert_eq!(pixmap.width(), 702);
     assert_eq!(pixmap.height(), 936);
