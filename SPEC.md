@@ -299,7 +299,7 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
      - **Inline / paragraph text formatting** — `RootText` parser handles the wire format, but none of the current fixtures contain text blocks, so the path is unexercised.
      - **Anchor-group fixture confirmation** (spec §5.3 TODO) — only the new LWW-wrapped layout (indices 7-10) is implemented; the older 4-6 layout has no fixture coverage.
      - **Round-trip / writer support** — read-only renderer follows ddvk and discards trailing `extra_data`. Round-trip would need rmscene-style preservation.
-11. **PNG rendering** — Rasterize strokes, `remarkable-cli render` command. Deliverable: PNG output of notebook pages.
+11. +**PNG rendering** — Rasterize strokes, `remarkable-cli render` command. Deliverable: PNG output of notebook pages.
 
 ### Phase 5: Polish
 12. **Deferred commands** — `recent`, `purge`, `restart`, hostname auto-discovery.
@@ -311,7 +311,6 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
     - metadata reader on crates.io
 
 ### Phase 6: Discovered During implementation
-
  - tag manipulation: add/remove
  - filter by tag
  - count by tag:

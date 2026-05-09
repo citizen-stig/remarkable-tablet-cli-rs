@@ -24,8 +24,8 @@ use remarkable_rm::{RenderOptions, parse_page, render_page};
 use remarkable_tablet::connection::{
     RemoteEntry, RemoteFileKind, RemoteMetadata, TabletConnection,
 };
-use remarkable_tablet::{IoSource, TabletError};
 use remarkable_tablet::metadata_loader;
+use remarkable_tablet::{IoSource, TabletError};
 
 #[derive(Serialize, Debug)]
 pub struct RenderOutput {
@@ -78,7 +78,18 @@ pub async fn run_from_backup(
 ) -> anyhow::Result<RenderOutput> {
     let xochitl = locate_xochitl_root(backup_root.as_ref())?;
     let conn = BackupConnection;
-    let data_dir = xochitl.to_string_lossy().into_owned();
+    // `TabletConnection` paths are `&str` (SFTP-shaped); rejecting non-UTF-8
+    // here gives a clean error instead of letting `to_string_lossy()` replace
+    // bad bytes with U+FFFD and surface as a confusing "file not found" later.
+    let data_dir = xochitl
+        .to_str()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--from-backup path is not valid UTF-8: {}",
+                xochitl.display()
+            )
+        })?
+        .to_string();
     let entries = metadata_loader::load_all_metadata(&conn, &data_dir)
         .await
         .context("load metadata from backup")?;
@@ -131,12 +142,7 @@ pub async fn run_with_conn<C: TabletConnection>(
             .await
             .with_context(|| format!("read {remote}"))?;
         let page = parse_page(&bytes).with_context(|| format!("parse {remote}"))?;
-        let opts = RenderOptions {
-            width: args.width,
-            height: page
-                .paper_size
-                .map_or(remarkable_rm::DEFAULT_HEIGHT, |(_, h)| h),
-        };
+        let opts = render_options_for(&page, args.width);
         let png = render_page(&page, opts).with_context(|| format!("render {remote}"))?;
         let output_path = output_dir.join(format!("{}_page_{page_index}.png", entry.uuid));
         tokio::fs::write(&output_path, &png)
@@ -158,6 +164,19 @@ pub async fn run_with_conn<C: TabletConnection>(
         dpi: args.dpi,
         pages: rendered,
     })
+}
+
+/// Pick canvas dimensions for `page` honoring the user's `--width` while
+/// preserving the page's aspect ratio. Without this scaling, `tiny-skia`'s
+/// transform applies different `scale_x` / `scale_y` and squashes strokes
+/// when only one dimension is overridden.
+fn render_options_for(page: &remarkable_rm::Page, width: u32) -> RenderOptions {
+    let (src_w, src_h) = page
+        .paper_size
+        .unwrap_or((remarkable_rm::DEFAULT_WIDTH, remarkable_rm::DEFAULT_HEIGHT));
+    let height = u32::try_from(u64::from(width) * u64::from(src_h) / u64::from(src_w.max(1)))
+        .unwrap_or(src_h);
+    RenderOptions { width, height }
 }
 
 fn expect_notebook(entry: &DocumentEntry) -> anyhow::Result<()> {
@@ -247,11 +266,13 @@ struct BackupConnection;
 
 impl TabletConnection for BackupConnection {
     async fn read_file(&self, path: &str) -> Result<Vec<u8>, TabletError> {
-        tokio::fs::read(path).await.map_err(|source| TabletError::Io {
-            op: "read",
-            path: path.to_string(),
-            source: IoSource::Local(source),
-        })
+        tokio::fs::read(path)
+            .await
+            .map_err(|source| TabletError::Io {
+                op: "read",
+                path: path.to_string(),
+                source: IoSource::Local(source),
+            })
     }
 
     async fn write_file(&self, _path: &str, _data: &[u8]) -> Result<(), TabletError> {
@@ -267,15 +288,11 @@ impl TabletConnection for BackupConnection {
                 source: IoSource::Local(source),
             })?;
         let mut out = Vec::new();
-        while let Some(entry) = rd
-            .next_entry()
-            .await
-            .map_err(|source| TabletError::Io {
-                op: "read_dir",
-                path: path.to_string(),
-                source: IoSource::Local(source),
-            })?
-        {
+        while let Some(entry) = rd.next_entry().await.map_err(|source| TabletError::Io {
+            op: "read_dir",
+            path: path.to_string(),
+            source: IoSource::Local(source),
+        })? {
             let name = entry.file_name().to_string_lossy().into_owned();
             let entry_path = entry.path();
             let meta = entry.metadata().await.map_err(|source| TabletError::Io {
@@ -292,11 +309,13 @@ impl TabletConnection for BackupConnection {
     }
 
     async fn stat(&self, path: &str) -> Result<RemoteMetadata, TabletError> {
-        let meta = tokio::fs::metadata(path).await.map_err(|source| TabletError::Io {
-            op: "stat",
-            path: path.to_string(),
-            source: IoSource::Local(source),
-        })?;
+        let meta = tokio::fs::metadata(path)
+            .await
+            .map_err(|source| TabletError::Io {
+                op: "stat",
+                path: path.to_string(),
+                source: IoSource::Local(source),
+            })?;
         Ok(into_remote_metadata(&meta))
     }
 

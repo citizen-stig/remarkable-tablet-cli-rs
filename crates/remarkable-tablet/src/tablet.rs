@@ -111,6 +111,16 @@ pub async fn start_xochitl<C: TabletConnection>(conn: &C) -> Result<(), TabletEr
 /// of priority). The error type is generic so callers using `anyhow::Error`
 /// or any other error type that admits `From<TabletError>` can pass a `work`
 /// future returning their own error type.
+///
+/// # Limitations
+/// Restart only runs if the `work` future returns normally. If `work` panics
+/// or the surrounding task is cancelled (`select!`, `JoinHandle::abort`,
+/// runtime shutdown), the restart future is dropped without executing and
+/// xochitl stays stopped — the user must run `systemctl start xochitl`
+/// manually. Don't introduce panic-prone code or cancellation points inside
+/// `work()`. A `Drop`-based RAII guard would be more robust but can't
+/// `await` from `Drop`; the one-shot CLI use case doesn't justify the
+/// detached-spawn machinery that would solve it.
 pub async fn with_xochitl_stopped<C, T, E, Fut>(
     conn: &C,
     no_restart: bool,
@@ -153,9 +163,11 @@ pub async fn update_metadata<C: TabletConnection>(
             path: path.to_string(),
             source,
         })?;
-    let obj = json.as_object_mut().ok_or_else(|| TabletError::NotJsonObject {
-        path: path.to_string(),
-    })?;
+    let obj = json
+        .as_object_mut()
+        .ok_or_else(|| TabletError::NotJsonObject {
+            path: path.to_string(),
+        })?;
     f(obj);
     let bytes = serde_json::to_vec(&json).map_err(|source| TabletError::Json {
         path: path.to_string(),
@@ -167,27 +179,42 @@ pub async fn update_metadata<C: TabletConnection>(
 
 async fn fetch_firmware<C: TabletConnection>(conn: &C) -> Result<String, TabletError> {
     let bytes = conn.read_file("/etc/version").await?;
-    let s = String::from_utf8(bytes)
-        .map_err(|source| TabletError::CommandOutputNotUtf8 { source })?;
+    let s =
+        String::from_utf8(bytes).map_err(|source| TabletError::CommandOutputNotUtf8 { source })?;
     Ok(s.trim().to_string())
 }
 
 async fn fetch_battery<C: TabletConnection>(conn: &C) -> Result<u32, TabletError> {
     let root = "/sys/class/power_supply";
     let entries = conn.read_dir(root).await?;
+    // Tolerate per-entry failure (read or parse) and try the next sibling.
+    // /sys/class/power_supply often lists non-battery devices (USB, AC) whose
+    // `capacity` is missing or non-numeric; the first usable reading wins.
     let mut last_err: Option<TabletError> = None;
     for entry in entries {
         let cap_path = format!("{root}/{}/capacity", entry.name);
-        match conn.read_file(&cap_path).await {
-            Ok(raw) => {
-                let s = String::from_utf8(raw)
-                    .map_err(|source| TabletError::CommandOutputNotUtf8 { source })?;
-                return s.trim().parse::<u32>().map_err(|source| TabletError::ParseInt {
-                    what: format!("battery capacity `{}`", s.trim()),
+        let raw = match conn.read_file(&cap_path).await {
+            Ok(raw) => raw,
+            Err(err) => {
+                last_err = Some(err);
+                continue;
+            }
+        };
+        let s = match String::from_utf8(raw) {
+            Ok(s) => s,
+            Err(source) => {
+                last_err = Some(TabletError::CommandOutputNotUtf8 { source });
+                continue;
+            }
+        };
+        match s.trim().parse::<u32>() {
+            Ok(percent) => return Ok(percent),
+            Err(source) => {
+                last_err = Some(TabletError::ParseInt {
+                    what: format!("battery capacity `{}` from {cap_path}", s.trim()),
                     source,
                 });
             }
-            Err(err) => last_err = Some(err),
         }
     }
     Err(last_err.unwrap_or_else(|| TabletError::CommandOutput {
@@ -273,6 +300,24 @@ mod tests {
         assert_eq!(info.disk_total_mb, 6144);
         assert_eq!(info.disk_used_mb, 2048);
         assert_eq!(info.disk_free_mb, 4096);
+    }
+
+    /// `/sys/class/power_supply` typically holds multiple entries (USB, AC,
+    /// battery). The first one whose `capacity` reads-and-parses cleanly wins;
+    /// a sibling whose capacity is non-numeric or unreadable must not abort the
+    /// probe.
+    #[tokio::test]
+    async fn fetch_battery_skips_unparseable_capacity() {
+        let conn = FakeConnection::new();
+        // `read_dir` on the FakeConnection sorts alphabetically, so put the bad
+        // entry first by name so we know it's reached before the good one.
+        conn.mkdir("/sys/class/power_supply/aaa_usb");
+        conn.set_file("/sys/class/power_supply/aaa_usb/capacity", "Unknown\n");
+        conn.mkdir("/sys/class/power_supply/zzz_battery");
+        conn.set_file("/sys/class/power_supply/zzz_battery/capacity", "67\n");
+
+        let percent = fetch_battery(&conn).await.unwrap();
+        assert_eq!(percent, 67);
     }
 
     #[tokio::test]

@@ -10,7 +10,14 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.92"
 license = "MIT OR Apache-2.0"
+authors = ["Nikolai Golub <nikolay.v.golub@gmail.com>"]
+repository = "https://github.com/nikolaygolub/remarkable-tablet-cli-rs"
+homepage = "https://github.com/nikolaygolub/remarkable-tablet-cli-rs"
+readme = "README.md"
+keywords = ["remarkable", "cli", "tablet", "ssh", "sftp"]
+categories = ["command-line-utilities"]
 
 [workspace.dependencies]
 anyhow = "1.0"

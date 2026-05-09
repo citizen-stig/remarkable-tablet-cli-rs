@@ -120,8 +120,9 @@ pub fn order_page_files_from_pages(
     pages: Option<&[serde_json::Value]>,
     discovered: &mut Vec<String>,
 ) -> Vec<String> {
-    discovered.sort();
     let Some(arr) = pages else {
+        // Fallback path: no recorded order, hand back filename-sorted.
+        discovered.sort();
         return std::mem::take(discovered);
     };
 
@@ -159,8 +160,9 @@ fn select_page_files_from_pages(
     pages: &[serde_json::Value],
     discovered: &mut Vec<String>,
 ) -> Vec<(u32, String)> {
-    discovered.sort();
-
+    // `discovered` is drained into a `HashSet` below, so its order doesn't
+    // need to be deterministic here — leftovers get sorted by filename
+    // before being numbered after the recorded pages.
     let mut ordered = Vec::with_capacity(discovered.len());
     let mut remaining: HashSet<String> = discovered.drain(..).collect();
     for (idx, item) in pages.iter().enumerate() {

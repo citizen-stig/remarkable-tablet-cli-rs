@@ -44,6 +44,7 @@ pub struct SshConnection {
     /// We keep no mutex here — that's the whole point of dropping the lock,
     /// since holding one across `await` was serializing every SFTP round-trip.
     sftp: SftpSession,
+    verbose: bool,
 }
 
 impl SshConnection {
@@ -94,26 +95,34 @@ impl SshConnection {
                 op: "request sftp subsystem".to_string(),
                 source,
             })?;
-        let sftp = SftpSession::new(channel.into_stream()).await.map_err(
-            |source| TabletError::Io {
+        let sftp = SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|source| TabletError::Io {
                 op: "start_session",
                 path: String::new(),
                 source: IoSource::Sftp(source),
-            },
-        )?;
+            })?;
 
         Ok(Self {
             handle: Mutex::new(handle),
             sftp,
+            verbose: opts.verbose,
         })
     }
 
+    /// Send a best-effort SSH `disconnect`. Errors are logged under
+    /// `--verbose` and otherwise ignored — the session is being torn down
+    /// regardless and there's no useful caller action when "bye" can't be
+    /// delivered (the remote may have already closed the channel).
     pub async fn disconnect(&self) {
         let handle = self.handle.lock().await;
-        handle
+        if let Err(err) = handle
             .disconnect(Disconnect::ByApplication, "bye", "en")
             .await
-            .ok();
+            && self.verbose
+        {
+            eprintln!("ssh disconnect: {err}");
+        }
     }
 }
 
@@ -223,11 +232,14 @@ fn into_remote_metadata(meta: &Metadata) -> RemoteMetadata {
 
 impl TabletConnection for SshConnection {
     async fn read_file(&self, path: &str) -> Result<Vec<u8>, TabletError> {
-        self.sftp.read(path).await.map_err(|source| TabletError::Io {
-            op: "read",
-            path: path.to_string(),
-            source: IoSource::Sftp(source),
-        })
+        self.sftp
+            .read(path)
+            .await
+            .map_err(|source| TabletError::Io {
+                op: "read",
+                path: path.to_string(),
+                source: IoSource::Sftp(source),
+            })
     }
 
     async fn write_file(&self, path: &str, data: &[u8]) -> Result<(), TabletError> {
@@ -255,13 +267,11 @@ impl TabletConnection for SshConnection {
                 path: path.to_string(),
                 source: IoSource::Local(source),
             })?;
-        file.shutdown()
-            .await
-            .map_err(|source| TabletError::Io {
-                op: "close",
-                path: path.to_string(),
-                source: IoSource::Local(source),
-            })?;
+        file.shutdown().await.map_err(|source| TabletError::Io {
+            op: "close",
+            path: path.to_string(),
+            source: IoSource::Local(source),
+        })?;
         Ok(())
     }
 
@@ -319,13 +329,14 @@ impl TabletConnection for SshConnection {
 
     async fn execute(&self, command: &str) -> Result<String, TabletError> {
         let handle = self.handle.lock().await;
-        let mut channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|source| TabletError::Ssh {
-                op: format!("open channel for `{command}`"),
-                source,
-            })?;
+        let mut channel =
+            handle
+                .channel_open_session()
+                .await
+                .map_err(|source| TabletError::Ssh {
+                    op: format!("open channel for `{command}`"),
+                    source,
+                })?;
         channel
             .exec(true, command)
             .await

@@ -26,10 +26,7 @@ const RESERVED_TRASH_PATH_MSG: &str =
 /// Returns [`MetadataError::InvalidPath`] if `path` does not start with `'/'`,
 /// an intermediate segment is not a folder, or two siblings share the same name.
 /// Returns [`MetadataError::NotFound`] if a segment has no match.
-pub fn resolve_path<'a>(
-    tree: &'a DocumentTree,
-    path: &str,
-) -> Result<Resolved<'a>, MetadataError> {
+pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> Result<Resolved<'a>, MetadataError> {
     if !path.starts_with('/') {
         return Err(MetadataError::InvalidPath(format!(
             "path must start with '/': {path}"
@@ -214,7 +211,9 @@ pub fn ensure_not_reserved_trash_path(
     name: &str,
 ) -> Result<(), MetadataError> {
     if would_create_reserved_trash_path(tree, parent, name) {
-        return Err(MetadataError::InvalidPath(RESERVED_TRASH_PATH_MSG.to_string()));
+        return Err(MetadataError::InvalidPath(
+            RESERVED_TRASH_PATH_MSG.to_string(),
+        ));
     }
     Ok(())
 }

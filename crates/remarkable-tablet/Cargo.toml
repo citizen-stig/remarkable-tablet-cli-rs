@@ -2,7 +2,13 @@
 name = "remarkable-tablet"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "SSH/SFTP client and high-level filesystem operations for the reMarkable tablet."
 
 [features]
