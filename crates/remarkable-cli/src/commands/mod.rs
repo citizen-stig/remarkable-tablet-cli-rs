@@ -8,6 +8,7 @@ pub mod ls;
 pub mod mkdir;
 pub mod mv;
 pub mod notebook_pages;
+pub mod read;
 pub mod rename;
 pub mod render;
 pub mod rm;

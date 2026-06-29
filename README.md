@@ -107,7 +107,7 @@ remarkable-cli --host 192.168.1.42 ls
 **Authentication** — tried in this order:
 
 1. SSH agent (whatever is loaded via `ssh-add`).
-2. SSH key file (`--key_file`, default `~/.ssh/id_rsa`).
+2. SSH key file (`--key-file`, default `~/.ssh/id_rsa`).
 3. Password (`--password`, the `REMARKABLE_PASSWORD` env var, or the config
    file).
 
@@ -153,7 +153,17 @@ remarkable-cli render "/Notebooks/Meeting Notes" --pages 1-5 --output ./renders/
 Each page is written as a separate PNG: `<UUID>_page_<N>.png`. Stroke layers
 only — PDF/ePub backgrounds are not yet composited (planned).
 
-### 5. Upload a PDF into a folder
+### 5. Read a document in one step (handy for agents)
+
+```sh
+remarkable-cli read "/Notebooks/Meeting Notes"
+```
+
+Picks the action by file type: notebooks render to PNG, PDFs/ePubs download
+as-is — so a script (or LLM) needn't know the raw-`.rm`-vs-render distinction.
+The raw `.rm` pages remain available via `download`.
+
+### 6. Upload a PDF into a folder
 
 ```sh
 remarkable-cli upload paper.pdf --parent /Research
@@ -176,6 +186,7 @@ The folder must already exist; create it with
 | `download`| Fetch a document's source file or raw `.rm` pages.              |
 | `upload`  | Upload PDF or ePub files to the tablet.                         |
 | `render`  | Rasterize notebook pages to PNG.                                |
+| `read`    | One step: render notebooks to PNG, download PDFs/ePubs as-is.    |
 | `mkdir`   | Create a folder. `--parents/-p` for intermediates.              |
 | `mv`      | Move a document or folder.                                      |
 | `rename`  | Rename a document or folder.                                    |
@@ -183,6 +194,17 @@ The folder must already exist; create it with
 
 For full flag documentation, see [`SPEC.md`](SPEC.md) or run
 `remarkable-cli <command> --help`.
+
+---
+
+## Names and duplicates
+
+Paths address items by name, so sibling names should stay unique. `mv`,
+`rename`, and `upload` refuse to create a duplicate sibling by default — pass
+`--allow-duplicate` to override. If a path is already ambiguous (e.g. duplicate
+names created on the device itself), commands fail with an `ambiguous` error
+listing the candidate UUIDs; under `--format json` they come back as a
+`candidates` array, so you can retry with one.
 
 ---
 
@@ -206,7 +228,7 @@ The error contract (codes like `connection_failed`, `auth_failed`,
 | Symptom                        | Likely cause / fix                                                                                                       |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
 | `connection_failed` over USB   | USB cable not connected, or the tablet's USB-network interface is down. Replug.                                          |
-| `auth_failed`                  | Password from Settings changed, or `--key_file` doesn't match an entry in `~/.ssh/authorized_keys` on the tablet.        |
+| `auth_failed`                  | Password from Settings changed, or `--key-file` doesn't match an entry in `~/.ssh/authorized_keys` on the tablet.        |
 | Hostname-based discovery fails | Use the explicit `10.11.99.1` (USB) or the Wi-Fi IP from the tablet's Settings.                                          |
 | Notebook renders empty         | Only firmware-3 v6 stroke files are supported; older formats currently fail with `UnsupportedVersion`.                   |
 

@@ -71,6 +71,7 @@ fn args(files: &[&Path], parent: Option<&str>, name: Option<&str>, dry_run: bool
         parent: parent.map(String::from),
         name: name.map(String::from),
         dry_run,
+        allow_duplicate: false,
     }
 }
 
@@ -414,7 +415,7 @@ async fn upload_to_trashed_folder_rejected() {
 }
 
 #[tokio::test]
-async fn upload_warns_on_duplicate_name() {
+async fn upload_duplicate_name_blocked_then_allowed() {
     let conn = FakeConnection::new();
     populate(&conn);
     register_xochitl(&conn);
@@ -422,11 +423,28 @@ async fn upload_warns_on_duplicate_name() {
     let dir = tempfile::tempdir().unwrap();
     let pdf = make_local(dir.path(), "duplicate.pdf", b"%PDF-dup");
 
-    let out = upload::run_with_conn(
+    // Default: refuse and write nothing to the tablet.
+    let err = upload::run_with_conn(
         &conn,
         DATA_DIR,
         &tree,
         &args(&[&pdf], None, None, false),
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(downcast_cli(err), CliError::AlreadyExists(_)));
+    assert!(conn.executed_commands().is_empty());
+
+    // With --allow-duplicate: the upload proceeds and surfaces a warning.
+    let out = upload::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &UploadArgs {
+            allow_duplicate: true,
+            ..args(&[&pdf], None, None, false)
+        },
         false,
     )
     .await

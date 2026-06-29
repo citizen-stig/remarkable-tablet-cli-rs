@@ -88,6 +88,7 @@ pub fn parse_page(bytes: &[u8]) -> Result<Page, ParseError> {
             // MigrationInfo, AuthorIds, PageInfo, SceneGlyphItem,
             // SceneTextItem, SceneTombstoneItem, and unknown types are
             // consumed but not surfaced (renderer doesn't need them yet).
+            // TODO: Be explicit about non-used types.
             _ => {}
         }
     }

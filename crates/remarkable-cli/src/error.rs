@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use remarkable_metadata::MetadataError;
+use remarkable_metadata::{AmbiguousCandidate, MetadataError, ambiguous_message};
 use remarkable_tablet::TabletError;
 
 #[derive(Debug, thiserror::Error)]
@@ -19,6 +19,14 @@ pub enum CliError {
 
     #[error("Invalid path: {0}")]
     InvalidPath(String),
+
+    /// A path matched more than one sibling. Carries the candidate UUIDs so a
+    /// JSON consumer can pick one without re-parsing the message.
+    #[error("{message}")]
+    Ambiguous {
+        message: String,
+        candidates: Vec<AmbiguousCandidate>,
+    },
 
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
@@ -45,6 +53,7 @@ impl CliError {
             Self::NotFound(_) => "not_found",
             Self::AlreadyExists(_) => "already_exists",
             Self::InvalidPath(_) => "invalid_path",
+            Self::Ambiguous { .. } => "ambiguous",
             Self::PermissionDenied(_) => "permission_denied",
             Self::XochitlError(_) => "xochitl_error",
             Self::FormatError(_) => "format_error",
@@ -66,11 +75,24 @@ impl CliError {
             Self::FormatError(_) => 8,
             Self::IoError(_) => 9,
             Self::NotImplemented(_) => 10,
+            Self::Ambiguous { .. } => 11,
         }
     }
 
     #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
+        if let Self::Ambiguous {
+            message,
+            candidates,
+        } = self
+        {
+            return json!({
+                "error": true,
+                "code": self.code(),
+                "message": message,
+                "candidates": serde_json::to_value(candidates).unwrap_or(serde_json::Value::Null),
+            });
+        }
         json!({
             "error": true,
             "code": self.code(),
@@ -90,6 +112,10 @@ impl From<MetadataError> for CliError {
         match err {
             MetadataError::NotFound(msg) => Self::NotFound(msg),
             MetadataError::InvalidPath(msg) => Self::InvalidPath(msg),
+            MetadataError::Ambiguous { name, candidates } => Self::Ambiguous {
+                message: ambiguous_message(&name, &candidates),
+                candidates,
+            },
             // Tablet-data-shape failures (cycles, missing .content, JSON parse)
             // are surfaced as IoError so the CLI keeps a single bucket for
             // "the tablet's data is structurally wrong"; the Display impl on
@@ -125,5 +151,46 @@ impl From<TabletError> for CliError {
             | TabletError::NotJsonObject { .. }
             | TabletError::Mock { .. } => Self::IoError(err.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn ambiguous_maps_to_structured_json_with_candidates() {
+        let u1 = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let u2 = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+        let meta = MetadataError::Ambiguous {
+            name: "Notes".to_string(),
+            candidates: vec![
+                AmbiguousCandidate {
+                    uuid: u1,
+                    kind: "pdf",
+                    path: "/Notes".to_string(),
+                },
+                AmbiguousCandidate {
+                    uuid: u2,
+                    kind: "epub",
+                    path: "/Notes".to_string(),
+                },
+            ],
+        };
+
+        let cli: CliError = meta.into();
+        assert_eq!(cli.code(), "ambiguous");
+        assert_eq!(cli.exit_code(), 11);
+
+        let json = cli.to_json();
+        assert_eq!(json["error"], true);
+        assert_eq!(json["code"], "ambiguous");
+        assert!(json["message"].as_str().unwrap().contains("Notes"));
+        let candidates = json["candidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0]["uuid"], u1.to_string());
+        assert_eq!(candidates[0]["kind"], "pdf");
+        assert_eq!(candidates[1]["kind"], "epub");
     }
 }

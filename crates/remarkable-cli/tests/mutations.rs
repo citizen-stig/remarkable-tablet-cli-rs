@@ -409,6 +409,7 @@ async fn mv_document_to_folder_updates_parent() {
         &MvArgs {
             source: "/Quick Note".into(),
             dest_folder: "/Work".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -441,6 +442,7 @@ async fn mv_to_root_updates_parent_to_empty_string() {
         &MvArgs {
             source: "/Work/Notes".into(),
             dest_folder: "/".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -465,6 +467,7 @@ async fn mv_out_of_trash_clears_deleted_flag() {
         &MvArgs {
             source: "/trash/Old Folder".into(),
             dest_folder: "/".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -508,6 +511,7 @@ async fn mv_same_parent_still_restores_deleted_entries() {
         &MvArgs {
             source: "/Hidden Root".into(),
             dest_folder: "/".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -538,6 +542,7 @@ async fn mv_preserves_unknown_metadata_fields() {
         &MvArgs {
             source: "/Work/Notes".into(),
             dest_folder: "/".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -563,6 +568,7 @@ async fn mv_bumps_version() {
         &MvArgs {
             source: "/Quick Note".into(),
             dest_folder: "/Work".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -587,6 +593,7 @@ async fn mv_into_self_rejected() {
         &MvArgs {
             source: "/Work".into(),
             dest_folder: "/Work".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -610,6 +617,7 @@ async fn mv_into_descendant_rejected() {
         &MvArgs {
             source: "/Work".into(),
             dest_folder: "/Work/Sub".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -633,6 +641,7 @@ async fn mv_to_document_rejected() {
         &MvArgs {
             source: "/Quick Note".into(),
             dest_folder: "/Work/Notes".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -656,6 +665,7 @@ async fn mv_into_trashed_folder_rejected() {
         &MvArgs {
             source: "/Quick Note".into(),
             dest_folder: FOLDER_TRASHED_UUID.into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -679,6 +689,7 @@ async fn mv_root_rejected() {
         &MvArgs {
             source: "/".into(),
             dest_folder: "/Work".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -702,6 +713,7 @@ async fn mv_same_parent_is_no_op_no_xochitl_calls() {
         &MvArgs {
             source: "/Quick Note".into(),
             dest_folder: "/".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -718,8 +730,9 @@ async fn mv_same_parent_is_no_op_no_xochitl_calls() {
 }
 
 #[tokio::test]
-async fn mv_warns_on_duplicate_name_in_destination() {
-    // Add a "Quick Note" inside /Work to set up a collision.
+async fn mv_duplicate_name_blocked_by_default_allowed_with_flag() {
+    // Add a "Quick Note" inside /Work to set up a collision with the
+    // root-level "Quick Note" we move in.
     let conn = FakeConnection::new();
     populate(&conn);
     register_xochitl(&conn);
@@ -737,6 +750,28 @@ async fn mv_warns_on_duplicate_name_in_destination() {
     );
     let tree = build_tree(&conn).await;
 
+    // Default: refuse the move and leave the source untouched.
+    let err = mv::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &MvArgs {
+            source: "/Quick Note".into(),
+            dest_folder: "/Work".into(),
+            allow_duplicate: false,
+        },
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(downcast_cli(err), CliError::AlreadyExists(_)));
+    assert!(conn.executed_commands().is_empty());
+    assert_eq!(
+        read_metadata(&conn, DOC_QUICK_UUID).await.parent,
+        Parent::Root
+    );
+
+    // With --allow-duplicate: the move proceeds and surfaces a warning.
     let out = mv::run_with_conn(
         &conn,
         DATA_DIR,
@@ -744,18 +779,16 @@ async fn mv_warns_on_duplicate_name_in_destination() {
         &MvArgs {
             source: "/Quick Note".into(),
             dest_folder: "/Work".into(),
+            allow_duplicate: true,
         },
         false,
     )
     .await
     .unwrap();
-
     assert_eq!(out.warnings.len(), 1);
     assert!(out.warnings[0].contains("Quick Note"));
-    // Move still happens.
-    let raw = read_metadata(&conn, DOC_QUICK_UUID).await;
     assert_eq!(
-        raw.parent,
+        read_metadata(&conn, DOC_QUICK_UUID).await.parent,
         Parent::Folder(uuid::Uuid::parse_str(FOLDER_WORK_UUID).unwrap())
     );
 }
@@ -774,6 +807,7 @@ async fn mv_brackets_xochitl_in_order() {
         &MvArgs {
             source: "/Quick Note".into(),
             dest_folder: "/Work".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -806,6 +840,7 @@ async fn mv_no_restart_skips_start() {
         &MvArgs {
             source: "/Quick Note".into(),
             dest_folder: "/Work".into(),
+            allow_duplicate: false,
         },
         true,
     )
@@ -835,6 +870,7 @@ async fn rename_document_updates_visible_name() {
         &RenameArgs {
             path_or_uuid: "/Quick Note".into(),
             new_name: "Daily Journal".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -865,6 +901,7 @@ async fn rename_folder_updates_visible_name() {
         &RenameArgs {
             path_or_uuid: "/Work".into(),
             new_name: "Office".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -896,6 +933,7 @@ async fn rename_preserves_unknown_metadata_fields() {
         &RenameArgs {
             path_or_uuid: "/Work/Notes".into(),
             new_name: "Notes v2".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -921,6 +959,7 @@ async fn rename_empty_name_rejected() {
         &RenameArgs {
             path_or_uuid: "/Quick Note".into(),
             new_name: "   ".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -944,6 +983,7 @@ async fn rename_name_with_slash_rejected() {
         &RenameArgs {
             path_or_uuid: "/Quick Note".into(),
             new_name: "a/b".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -967,6 +1007,7 @@ async fn rename_root_rejected() {
         &RenameArgs {
             path_or_uuid: "/".into(),
             new_name: "Whatever".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -977,12 +1018,34 @@ async fn rename_root_rejected() {
 }
 
 #[tokio::test]
-async fn rename_to_existing_sibling_name_warns_but_succeeds() {
+async fn rename_to_existing_sibling_name_blocked_then_allowed() {
     let conn = FakeConnection::new();
     populate(&conn);
     register_xochitl(&conn);
     let tree = build_tree(&conn).await;
 
+    // Default: refuse and leave the name untouched.
+    let err = rename::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &RenameArgs {
+            path_or_uuid: "/Quick Note".into(),
+            new_name: "duplicate".into(),
+            allow_duplicate: false,
+        },
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(downcast_cli(err), CliError::AlreadyExists(_)));
+    assert!(conn.executed_commands().is_empty());
+    assert_eq!(
+        read_metadata(&conn, DOC_QUICK_UUID).await.visible_name,
+        "Quick Note"
+    );
+
+    // With --allow-duplicate: the rename proceeds and surfaces a warning.
     let out = rename::run_with_conn(
         &conn,
         DATA_DIR,
@@ -990,16 +1053,18 @@ async fn rename_to_existing_sibling_name_warns_but_succeeds() {
         &RenameArgs {
             path_or_uuid: "/Quick Note".into(),
             new_name: "duplicate".into(),
+            allow_duplicate: true,
         },
         false,
     )
     .await
     .unwrap();
-
     assert_eq!(out.warnings.len(), 1);
     assert!(out.warnings[0].contains("duplicate"));
-    let raw = read_metadata(&conn, DOC_QUICK_UUID).await;
-    assert_eq!(raw.visible_name, "duplicate");
+    assert_eq!(
+        read_metadata(&conn, DOC_QUICK_UUID).await.visible_name,
+        "duplicate"
+    );
 }
 
 #[tokio::test]
@@ -1016,6 +1081,7 @@ async fn rename_same_name_is_no_op() {
         &RenameArgs {
             path_or_uuid: "/Quick Note".into(),
             new_name: "Quick Note".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -1043,6 +1109,7 @@ async fn rename_trashed_entry_reports_trash_path() {
         &RenameArgs {
             path_or_uuid: "/trash/Old Folder".into(),
             new_name: "Archive".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -1068,6 +1135,7 @@ async fn rename_trashed_entry_no_op_reports_trash_path() {
         &RenameArgs {
             path_or_uuid: FOLDER_TRASHED_UUID.into(),
             new_name: "Old Folder".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -1092,6 +1160,7 @@ async fn rename_brackets_xochitl_in_order() {
         &RenameArgs {
             path_or_uuid: "/Quick Note".into(),
             new_name: "Daily Notes".into(),
+            allow_duplicate: false,
         },
         false,
     )
@@ -1124,6 +1193,7 @@ async fn rename_no_restart_skips_start() {
         &RenameArgs {
             path_or_uuid: "/Quick Note".into(),
             new_name: "Daily Notes".into(),
+            allow_duplicate: false,
         },
         true,
     )
@@ -1328,6 +1398,7 @@ async fn rm_soft_delete_then_mv_out_restores() {
         &MvArgs {
             source: DOC_QUICK_UUID.into(),
             dest_folder: "/Work".into(),
+            allow_duplicate: false,
         },
         false,
     )

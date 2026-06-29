@@ -17,7 +17,7 @@ use crate::error::CliError;
 use crate::output::{self, OutputFormat};
 use remarkable_metadata::metadata::{DocumentEntry, Parent};
 use remarkable_metadata::path_resolver::{self, Resolved};
-use remarkable_metadata::tree::{ChildLookup, DocumentTree, ListFilter};
+use remarkable_metadata::tree::{DocumentTree, ListFilter};
 use remarkable_tablet::connection::TabletConnection;
 use remarkable_tablet::tablet;
 
@@ -88,12 +88,27 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     path_resolver::ensure_not_reserved_trash_path(tree, &new_parent, &source.visible_name)?;
 
-    let warnings = match tree.lookup_child(&new_parent, &source.visible_name) {
-        ChildLookup::Missing => vec![],
-        ChildLookup::Entry(_) | ChildLookup::Ambiguous => vec![format!(
+    // A same-named *other* sibling in the destination is a duplicate; the
+    // source matching itself (e.g. restoring a deleted entry into its own
+    // parent) is not.
+    let collides = tree
+        .child_entries(&new_parent)
+        .iter()
+        .any(|e| e.uuid != source.uuid && e.visible_name == source.visible_name);
+    let warnings = if collides {
+        if !args.allow_duplicate {
+            return Err(CliError::AlreadyExists(format!(
+                "destination already contains an entry named '{}'; pass --allow-duplicate to override",
+                source.visible_name
+            ))
+            .into());
+        }
+        vec![format!(
             "destination already contains an entry named '{}'",
             source.visible_name
-        )],
+        )]
+    } else {
+        vec![]
     };
 
     let metadata_remote = format!("{data_dir}/{}.metadata", source.uuid);
@@ -291,6 +306,7 @@ mod tests {
         let args = MvArgs {
             source: "/Inbox/trash".to_string(),
             dest_folder: "/".to_string(),
+            allow_duplicate: false,
         };
 
         let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)
@@ -320,6 +336,7 @@ mod tests {
         let args = MvArgs {
             source: "/Notes".to_string(),
             dest_folder: "aaaaaaaa-0000-0000-0000-000000000001".to_string(),
+            allow_duplicate: false,
         };
 
         let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)

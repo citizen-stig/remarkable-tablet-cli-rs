@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -307,11 +307,24 @@ fn format_flat_human(items: &[LsItem]) -> String {
         return "(empty)".to_string();
     }
     let recursive = items.iter().any(|i| i.depth.is_some());
+    // Names that collide among siblings (same parent) get a short-UUID suffix
+    // so duplicates are distinguishable in human output (JSON always has uuid).
+    let mut name_counts: HashMap<(Option<Uuid>, &str), usize> = HashMap::new();
+    for i in items {
+        *name_counts
+            .entry((i.entry.parent_uuid, i.entry.name.as_str()))
+            .or_default() += 1;
+    }
     let rows: Vec<[String; 4]> = items
         .iter()
         .map(|i| {
             let type_label = common::type_label(&i.entry.kind).to_string();
-            let name = flat_item_name(i, recursive);
+            let is_dup = name_counts
+                .get(&(i.entry.parent_uuid, i.entry.name.as_str()))
+                .copied()
+                .unwrap_or(0)
+                > 1;
+            let name = flat_item_name(i, recursive, is_dup);
             let modified = i
                 .entry
                 .last_modified
@@ -352,21 +365,19 @@ fn format_flat_human(items: &[LsItem]) -> String {
     lines.join("\n")
 }
 
-fn flat_item_name(item: &LsItem, recursive: bool) -> String {
+fn flat_item_name(item: &LsItem, recursive: bool, is_dup: bool) -> String {
     let e = &item.entry;
-    if recursive {
-        return e.path.clone();
-    }
-    if e.deleted {
+    let mut name = if recursive {
+        e.path.clone()
+    } else if e.deleted {
         let mut name = e.path.clone();
         if matches!(e.kind, ItemKind::Folder) {
             name.push('/');
         } else if e.pinned {
             name.push_str(" *");
         }
-        return name;
-    }
-    if matches!(e.kind, ItemKind::Folder) {
+        name
+    } else if matches!(e.kind, ItemKind::Folder) {
         format!("{}/", e.name)
     } else {
         let mut name = e.name.clone();
@@ -374,7 +385,15 @@ fn flat_item_name(item: &LsItem, recursive: bool) -> String {
             name.push_str(" *");
         }
         name
+    };
+    if is_dup {
+        let uuid = e.uuid.to_string();
+        let short = uuid.get(..8).unwrap_or(uuid.as_str());
+        name.push_str(" (");
+        name.push_str(short);
+        name.push(')');
     }
+    name
 }
 
 fn format_extras(item: &LsItem) -> String {

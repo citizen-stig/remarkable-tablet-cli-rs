@@ -45,6 +45,7 @@ async fn dispatch(ctx: &CommandContext, command: &Command) -> Result<(), CliErro
         Command::Rename(args) => commands::rename::execute(ctx, args).await,
         Command::Rm(args) => commands::rm::execute(ctx, args).await,
         Command::Render(args) => commands::render::execute(ctx, args).await,
+        Command::Read(args) => commands::read::execute(ctx, args).await,
     }
 }
 

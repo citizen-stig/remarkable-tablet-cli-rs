@@ -15,7 +15,7 @@ pub mod path_resolver;
 pub mod sort;
 pub mod tree;
 
-pub use error::MetadataError;
+pub use error::{AmbiguousCandidate, MetadataError, ambiguous_message};
 pub use metadata::{
     DocumentEntry, FileType, ItemKind, ItemType, Parent, RawContent, RawMetadata, extract_uuid,
     parse_content, parse_metadata,

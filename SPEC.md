@@ -58,6 +58,8 @@ All commands that take a document/folder reference accept either:
 - **UUID** (e.g., `a1b2c3d4-e5f6-...`) — precise, machine-friendly
 - **Human-readable path** (e.g., `/Notebooks/Meeting Notes`) — resolved by walking `parent` chains in metadata
 
+Sibling names are kept unique: mutating commands refuse to create a duplicate name by default (`--allow-duplicate` overrides). A path that is already ambiguous resolves to an `ambiguous` error whose JSON carries a `candidates` array of `{ uuid, kind, path }` so the caller can retry with a UUID.
+
 ### 3.1 `remarkable-cli connect`
 Test connectivity, print device info.
 
@@ -120,7 +122,7 @@ Upload PDF or ePub files to the tablet.
 6. SCP the source file as `<UUID>.pdf` / `<UUID>.epub`
 7. Restart xochitl after all files (unless `--no-restart`)
 
-Warns on duplicate `visibleName` in target folder.
+Refuses to create a duplicate `visibleName` in the target folder by default; `--allow-duplicate` overrides (and surfaces a warning).
 
 ### 3.8 `remarkable-cli download <PATH_OR_UUID>`
 Download a single document's source file (PDF, ePub) or .rm notebook files.
@@ -139,6 +141,13 @@ Render .rm notebook pages to PNG.
 **Output**: Array of `{ page, output_path, width, height }` — one entry per rendered page.
 
 Note: initial version renders strokes only (no PDF/ePub background compositing — that's a later enhancement).
+
+### 3.9a `remarkable-cli read <PATH_OR_UUID>`
+One-step "consumable form" fetch so callers needn't know the raw-`.rm`-vs-render split: renders notebooks to PNG (like `render`), downloads PDFs/ePubs (like `download`), choosing by `fileType`.
+
+**Flags**: `--output <PATH>` (directory for notebooks, file for PDF/ePub), `--pages <RANGE>` (notebooks only).
+
+**Output**: `{ uuid, name, file_type, action (rendered|downloaded), output_path, artifacts: [{ path, page? }], size_bytes? }`.
 
 ### 3.10 `remarkable-cli mv <SOURCE> <DEST_FOLDER>`
 Move document/folder to a different parent. Updates `parent` in `.metadata`. Stops/restarts xochitl.
@@ -314,7 +323,7 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
  - tag manipulation: add/remove
  - filter by tag
  - count by tag:
-   - "read" command: download/render in the same step, so it so consumable by LLM agent
+   - ✅ "read" command: download/render in the same step, so it's consumable by an LLM agent (see §3.9a)
    - download destination folder
 
 ---

@@ -85,10 +85,19 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let warnings = match tree.lookup_child(&entry.parent, &args.new_name) {
         ChildLookup::Missing => vec![],
-        ChildLookup::Entry(_) | ChildLookup::Ambiguous => vec![format!(
-            "parent already contains an entry named '{}'",
-            args.new_name
-        )],
+        ChildLookup::Entry(_) | ChildLookup::Ambiguous => {
+            if !args.allow_duplicate {
+                return Err(CliError::AlreadyExists(format!(
+                    "parent already contains an entry named '{}'; pass --allow-duplicate to override",
+                    args.new_name
+                ))
+                .into());
+            }
+            vec![format!(
+                "parent already contains an entry named '{}'",
+                args.new_name
+            )]
+        }
     };
 
     let metadata_remote = format!("{data_dir}/{}.metadata", entry.uuid);
@@ -238,6 +247,7 @@ mod tests {
         let args = RenameArgs {
             path_or_uuid: "/Notes".to_string(),
             new_name: "trash".to_string(),
+            allow_duplicate: false,
         };
 
         let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)

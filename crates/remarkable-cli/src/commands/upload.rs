@@ -117,10 +117,21 @@ pub async fn run_with_conn<C: TabletConnection>(
         plans.push(plan);
     }
 
-    let warnings: Vec<String> = plans
+    let duplicates: Vec<&str> = plans
         .iter()
         .filter(|p| !matches!(tree.lookup_child(&parent, &p.name), ChildLookup::Missing))
-        .map(|p| format!("parent already contains an entry named '{}'", p.name))
+        .map(|p| p.name.as_str())
+        .collect();
+    if !duplicates.is_empty() && !args.allow_duplicate {
+        return Err(CliError::AlreadyExists(format!(
+            "parent already contains an entry named '{}'; pass --allow-duplicate to override",
+            duplicates.join("', '")
+        ))
+        .into());
+    }
+    let warnings: Vec<String> = duplicates
+        .iter()
+        .map(|name| format!("parent already contains an entry named '{name}'"))
         .collect();
 
     let total_bytes: u64 = plans.iter().map(|p| p.size_bytes).sum();
@@ -444,6 +455,7 @@ mod tests {
             parent: None,
             name: Some("trash".to_string()),
             dry_run: true,
+            allow_duplicate: false,
         };
 
         let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)
@@ -468,6 +480,7 @@ mod tests {
             parent: Some("aaaaaaaa-0000-0000-0000-000000000001".to_string()),
             name: Some("Notes".to_string()),
             dry_run: true,
+            allow_duplicate: false,
         };
 
         let err = run_with_conn(&conn, "/xochitl", &tree, &args, false)

@@ -38,7 +38,12 @@ pub struct GlobalOptions {
     pub password: Option<String>,
 
     /// SSH private key path
-    #[arg(id = "key_file", long, global = true, default_value = "~/.ssh/id_rsa")]
+    #[arg(
+        id = "key_file",
+        long = "key-file",
+        global = true,
+        default_value = "~/.ssh/id_rsa"
+    )]
     pub key_file: String,
 
     /// Output format
@@ -58,7 +63,7 @@ pub struct GlobalOptions {
     /// Remote xochitl data directory path
     #[arg(
         id = "data_dir",
-        long,
+        long = "data-dir",
         global = true,
         default_value = "/home/root/.local/share/remarkable/xochitl"
     )]
@@ -169,6 +174,10 @@ pub enum Command {
 
     /// Render notebook pages to PNG
     Render(RenderArgs),
+
+    /// Fetch a document in consumable form: renders notebooks to PNG,
+    /// downloads PDFs/ePubs — picking the right action by file type
+    Read(ReadArgs),
 }
 
 // -- Per-command args --
@@ -276,6 +285,11 @@ pub struct UploadArgs {
     /// Show what would be uploaded without uploading
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Allow uploading even if the parent already contains an entry with
+    /// the same name (duplicates are refused by default)
+    #[arg(long)]
+    pub allow_duplicate: bool,
 }
 
 #[derive(Debug, Args)]
@@ -285,6 +299,11 @@ pub struct MvArgs {
 
     /// Destination folder path or UUID
     pub dest_folder: String,
+
+    /// Allow the move even if the destination already contains an entry
+    /// with the same name (duplicates are refused by default)
+    #[arg(long)]
+    pub allow_duplicate: bool,
 }
 
 #[derive(Debug, Args)]
@@ -304,6 +323,11 @@ pub struct RenameArgs {
 
     /// New name for the item
     pub new_name: String,
+
+    /// Allow the rename even if a sibling already has the new name
+    /// (duplicates are refused by default)
+    #[arg(long)]
+    pub allow_duplicate: bool,
 }
 
 #[derive(Debug, Args)]
@@ -347,6 +371,23 @@ pub struct RenderArgs {
     /// instead of the tablet. Skips SSH entirely.
     #[arg(long)]
     pub from_backup: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct ReadArgs {
+    /// Path or UUID of the document to read
+    pub path_or_uuid: String,
+
+    /// Output path. For notebooks a directory of PNGs (default `./<name>/`);
+    /// for PDF/ePub a file path (default `./<name>.<ext>`). Refuses to
+    /// overwrite an existing destination.
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+
+    /// Page range for notebooks (e.g., "1-5" or "1,3,7"). 1-indexed.
+    /// Ignored for PDF/ePub.
+    #[arg(long)]
+    pub pages: Option<PageSelection>,
 }
 
 // -- Helper enums --

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use uuid::Uuid;
 
-use crate::error::MetadataError;
+use crate::error::{AmbiguousCandidate, MetadataError};
 use crate::metadata::{DocumentEntry, FileType, ItemKind, Parent};
 use crate::tree::{ChildLookup, DocumentTree};
 
@@ -83,9 +83,10 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> Result<Resolved<'
                 current_parent = Parent::Folder(entry.uuid);
             }
             ChildLookup::Ambiguous => {
-                return Err(MetadataError::InvalidPath(format!(
-                    "ambiguous: multiple items named '{segment}' in the same folder — use a UUID instead"
-                )));
+                return Err(MetadataError::Ambiguous {
+                    name: (*segment).to_string(),
+                    candidates: ambiguous_candidates(tree, &current_parent, segment),
+                });
             }
         }
     }
@@ -133,6 +134,71 @@ fn strip_known_extension(name: &str) -> Option<(&str, &'static str)> {
         }
     }
     None
+}
+
+/// Collect the siblings under `parent` that a `ChildLookup::Ambiguous` for
+/// `segment` matched, as [`AmbiguousCandidate`]s. Mirrors [`lookup_leaf`]:
+/// literal `visible_name == segment` matches win; otherwise it falls back to
+/// the extension-stripped stem + matching `file_type` (so `Notes.pdf` lists the
+/// two `Notes` PDFs, not nothing).
+fn ambiguous_candidates(
+    tree: &DocumentTree,
+    parent: &Parent,
+    segment: &str,
+) -> Vec<AmbiguousCandidate> {
+    let literal: Vec<&DocumentEntry> = tree
+        .child_entries(parent)
+        .into_iter()
+        .filter(|e| e.visible_name == segment)
+        .collect();
+
+    let matched = if literal.len() >= 2 {
+        literal
+    } else if let Some((stem, ext)) = strip_known_extension(segment) {
+        tree.child_entries(parent)
+            .into_iter()
+            .filter(|e| {
+                e.visible_name == stem
+                    && matches!(
+                        &e.kind,
+                        ItemKind::Document { file_type, .. } if file_type.extension() == ext,
+                    )
+            })
+            .collect()
+    } else {
+        literal
+    };
+
+    matched
+        .into_iter()
+        .map(|e| AmbiguousCandidate {
+            uuid: e.uuid,
+            kind: entry_kind_label(e),
+            path: tree
+                .display_path(&e.uuid)
+                .map_or_else(|| format!("/{}", e.visible_name), str::to_string),
+        })
+        .collect()
+}
+
+/// Single-word kind label for an entry, matching the CLI's `type_label`.
+fn entry_kind_label(entry: &DocumentEntry) -> &'static str {
+    match &entry.kind {
+        ItemKind::Folder => "folder",
+        ItemKind::Document {
+            file_type: FileType::Pdf,
+            ..
+        } => "pdf",
+        ItemKind::Document {
+            file_type: FileType::Epub,
+            ..
+        } => "epub",
+        ItemKind::Document {
+            file_type: FileType::Notebook,
+            ..
+        } => "notebook",
+        ItemKind::Template => "template",
+    }
 }
 
 /// Up to `n` sibling names that look close to `name`, formatted with their
@@ -472,7 +538,16 @@ mod tests {
         ];
         let tree = DocumentTree::build(entries);
         let err = resolve_path(&tree, "/Same Name").unwrap_err();
-        assert!(matches!(err, MetadataError::InvalidPath(_)));
+        match err {
+            MetadataError::Ambiguous { name, candidates } => {
+                assert_eq!(name, "Same Name");
+                assert_eq!(candidates.len(), 2);
+                let uuids: Vec<String> = candidates.iter().map(|c| c.uuid.to_string()).collect();
+                assert!(uuids.contains(&"aaaaaaaa-0000-0000-0000-000000000001".to_string()));
+                assert!(uuids.contains(&"aaaaaaaa-0000-0000-0000-000000000002".to_string()));
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
     }
 
     #[test]
@@ -763,7 +838,7 @@ mod tests {
             ),
         ]);
         let bare = resolve_path(&tree, "/Notes").unwrap_err();
-        assert!(matches!(bare, MetadataError::InvalidPath(_)));
+        assert!(matches!(bare, MetadataError::Ambiguous { .. }));
         match resolve_path(&tree, "/Notes.pdf") {
             Ok(Resolved::Entry(e)) => assert_eq!(e.uuid, Uuid::parse_str(DOC_1).unwrap()),
             other => panic!("expected Pdf entry, got {other:?}"),
