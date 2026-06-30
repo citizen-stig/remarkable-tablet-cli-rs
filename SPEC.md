@@ -68,7 +68,7 @@ Test connectivity, print device info.
 ### 3.2 `remarkable-cli ls [PATH_OR_UUID]`
 List folder contents (default: root). Shows one level by default.
 
-**Flags**: `--recursive/-r`, `--depth <N>`, `--include-trashed`, `--sort <name|modified|type>`, `--tree` (indented tree output), `--documents-only`, `--folders-only`
+**Flags**: `--recursive/-r`, `--depth <N>`, `--include-trashed`, `--sort <name|modified|type>`, `--kind <all|documents|folders>`, `--tree` (indented tree output)
 
 **Output**: Array of `{ uuid, name, type (folder|document), file_type (pdf|epub|notebook|null), parent_uuid, path, modified, last_opened, tags, pinned, children_count (folders), page_count (docs) }`
 
@@ -117,9 +117,9 @@ Upload PDF or ePub files to the tablet.
 1. Validate file is PDF or ePub
 2. Generate UUID v4
 3. Stop xochitl (once before first file)
-4. Create `<UUID>.metadata` (visibleName, type: DocumentType, parent, timestamps)
+4. Upload the source file as `<UUID>.pdf` / `<UUID>.epub`
 5. Create `<UUID>.content` (fileType: pdf/epub)
-6. SCP the source file as `<UUID>.pdf` / `<UUID>.epub`
+6. Create `<UUID>.metadata` (visibleName, type: DocumentType, parent, timestamps)
 7. Restart xochitl after all files (unless `--no-restart`)
 
 Refuses to create a duplicate `visibleName` in the target folder by default; `--allow-duplicate` overrides (and surfaces a warning).
@@ -131,16 +131,16 @@ Download a single document's source file (PDF, ePub) or .rm notebook files.
 
 **Behavior**: Fetches the source PDF/ePub file, or for notebooks, the .rm page files into a local directory. Outputs `{ uuid, name, file_type, output_path, size_bytes }`.
 
-### 3.9 `remarkable-cli render <PATH_OR_UUID> [--pages <RANGE>]` *(deferred — Phase 4)*
+### 3.9 `remarkable-cli render <PATH_OR_UUID> [--pages <RANGE>]`
 Render .rm notebook pages to PNG.
 
 **Flags**: `--output <DIR>` [default: ./], `--pages <RANGE>` (e.g., `1-5` or `1,3,7`), `--width <PX>` [default: 1404], `--dpi <N>` [default: 226], `--from-backup <DIR>` (render from local backup instead of fetching)
 
-**Behavior**: Fetch .rm files from tablet (or read from backup), parse binary format (v3-v6), rasterize strokes to PNG. Each page is rendered as a **separate PNG file**: `<UUID>_page_<N>.png`.
+**Behavior**: Fetch `.rm` files from tablet (or read from backup), parse firmware-3 v6 stroke data, rasterize strokes to PNG. Each page is rendered as a **separate PNG file**: `<UUID>_page_<N>.png`.
 
 **Output**: Array of `{ page, output_path, width, height }` — one entry per rendered page.
 
-Note: initial version renders strokes only (no PDF/ePub background compositing — that's a later enhancement).
+Note: initial version renders strokes only. v3/v5 parsing, text-block rendering, and PDF/ePub background compositing are later enhancements.
 
 ### 3.9a `remarkable-cli read <PATH_OR_UUID>`
 One-step "consumable form" fetch so callers needn't know the raw-`.rm`-vs-render split: renders notebooks to PNG (like `render`), downloads PDFs/ePubs (like `download`), choosing by `fileType`.
@@ -183,7 +183,7 @@ JSON error format:
 ```json
 { "error": true, "code": "connection_failed", "message": "..." }
 ```
-Error codes: `connection_failed`, `auth_failed`, `not_found`, `already_exists`, `invalid_path`, `permission_denied`, `xochitl_error`, `format_error`, `io_error`.
+Error codes: `connection_failed`, `auth_failed`, `not_found`, `already_exists`, `invalid_path`, `ambiguous`, `permission_denied`, `xochitl_error`, `format_error`, `io_error`, `not_implemented`.
 
 ---
 
@@ -200,53 +200,39 @@ Error codes: `connection_failed`, `auth_failed`, `not_found`, `already_exists`, 
 
 ## 6. Architecture
 
-The crate has both a library and a binary target. `src/lib.rs` re-exports every module so `tests/` (integration) can reach `FakeConnection`, `fetch_device_info`, etc. directly. `src/main.rs` is a thin wrapper that calls into the library.
+The repository is a Cargo workspace split by responsibility:
 
 ```
-src/
-  lib.rs                  Module declarations (pub) for the library target
-  main.rs                 Entry point; `#[tokio::main] async fn main`, clap dispatch
-  cli.rs                  Clap derive structs (all commands + global opts)
-  config.rs               Config file + env var + CLI flag merging
-  connection.rs           TabletConnection trait + SshConnection + FakeConnection
-  tablet.rs               High-level tablet ops (device info, metadata reads, xochitl stop/restart)
-  metadata.rs             Serde structs for .metadata and .content JSON
-  tree.rs                 In-memory document tree from flat metadata
-  path_resolver.rs        Human path <-> UUID resolution
-  output.rs               JSON / human-readable formatting; verbose-log helper
-  error.rs                Error types and codes
-  commands/
-    mod.rs, connect.rs, ls.rs, info.rs, find.rs,
-    backup.rs, download.rs, upload.rs, mv.rs, mkdir.rs,
-    rename.rs, rm.rs
-  rm_parser/              (Phase 4 — deferred)
-    mod.rs                .rm binary parser (v3-v6)
-    types.rs              Stroke, Point, Layer, Page types
-    render.rs             Rasterize strokes to PNG via image crate
+crates/
+  remarkable-metadata/    .metadata/.content parsing, document tree, path resolver
+  remarkable-tablet/      TabletConnection trait, SSH/SFTP implementation, fake test connection
+  remarkable-rm/          .rm v6 parser and PNG renderer
+  remarkable-cli/         Binary, clap args, command implementations, config and output handling
 tests/
-  connect.rs              Integration test for `connect` via FakeConnection
-  fixtures/               Sample .metadata and .content JSON files
+  command-focused integration tests using FakeConnection and fixture data
 ```
 
 ### Testability: `TabletConnection` trait
 
-The core abstraction for testability. Defined in `connection.rs` using native `async fn` in traits (edition 2024):
+The core abstraction for testability. Defined in `crates/remarkable-tablet/src/connection/mod.rs` using native `async fn` in traits (edition 2024):
 
 ```rust
 pub trait TabletConnection {
-    async fn read_file(&self, path: &str) -> anyhow::Result<Vec<u8>>;
-    async fn write_file(&self, path: &str, data: &[u8]) -> anyhow::Result<()>;
-    async fn list_dir(&self, path: &str) -> anyhow::Result<Vec<String>>;
-    async fn remove_file(&self, path: &str) -> anyhow::Result<()>;
-    async fn execute(&self, command: &str) -> anyhow::Result<String>;
-    async fn file_exists(&self, path: &str) -> anyhow::Result<bool>;
+    async fn read_file(&self, path: &str) -> Result<Vec<u8>, TabletError>;
+    async fn write_file(&self, path: &str, data: &[u8]) -> Result<(), TabletError>;
+    async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, TabletError>;
+    async fn stat(&self, path: &str) -> Result<RemoteMetadata, TabletError>;
+    async fn remove_file(&self, path: &str) -> Result<(), TabletError>;
+    async fn remove_dir_all(&self, path: &str) -> Result<(), TabletError>;
+    async fn execute(&self, command: &str) -> Result<String, TabletError>;
+    async fn file_exists(&self, path: &str) -> Result<bool, TabletError>;
 }
 ```
 
 Path arguments are `&str` because they represent remote SFTP paths, which are UTF-8 strings per RFC 4251 §5 and draft-ietf-secsh-filexfer — not local OS-native paths. `std::path::Path` would be semantically wrong here (it carries OS-specific encoding and separator rules that don't apply to remote paths). No explicit `Send` bounds on the returned futures — nothing in the crate spawns tasks, so `Send` is not required. If `tokio::spawn` is introduced later, add bounds at that point. Consumers take `&C` with `C: TabletConnection` (generic monomorphization) rather than `&dyn TabletConnection`.
 
 - **Production**: `SshConnection` implements the trait via `russh`/`russh-sftp` (TCP probe → SSH handshake → SFTP subsystem). Auth tries SSH agent → key-file → password in order. Host-key verification accepts any server key — USB-connected tablets reflash their host key regularly; strict checking is impractical.
-- **Tests**: `FakeConnection` (also in `connection.rs`, exported publicly) operates on a `tempfile::TempDir`, enabling offline unit and integration tests. `set_file`, `mkdir`, and `set_command_output` let a test populate remote state; `execute` looks up registered substrings in the command.
+- **Tests**: `FakeConnection` lives behind the `remarkable-tablet/test-utils` feature and operates on a `tempfile::TempDir`, enabling offline unit and integration tests. `set_file`, `mkdir`, `set_command_output`, and error-injection helpers let tests populate remote state and exercise failures.
 
 ### Key dependencies
 | Crate                                       | Purpose                                                                 |
@@ -255,18 +241,18 @@ Path arguments are `&str` because they represent remote SFTP paths, which are UT
 | `russh` (pinned `=0.57.1`) + `russh-sftp`   | SSH/SFTP (pure Rust, no native C deps)                                  |
 | `tokio` (rt-multi-thread, macros, net, time, io-util, fs, sync) | Async runtime (required by russh)                    |
 | `serde` + `serde_json`                      | JSON ser/de                                                             |
-| `uuid`                                      | UUID v4 generation                                                      |
-| `image`                                     | PNG creation for .rm rendering (Phase 4)                                |
+| `uuid`                                      | UUID parsing and v4 generation                                          |
+| `tiny-skia`                                 | Stroke rasterization and PNG output for `.rm` rendering                 |
 | `toml`                                      | Config file parsing                                                     |
-| `anyhow`                                    | Application error propagation                                           |
-| `thiserror`                                 | Structured error types (JSON error codes)                               |
-| `tempfile`                                  | Backing store for `FakeConnection` (declared as a regular dep, not dev) |
+| `anyhow`                                    | CLI command-boundary context where needed                               |
+| `thiserror`                                 | Structured crate-specific error types                                   |
+| `tempfile`                                  | Backing store for `FakeConnection` under the test-utils feature         |
 
 Why `russh` over `ssh2`: `ssh2` wraps libssh2 (C), which requires OpenSSL/libssh2 system libraries and causes build issues across platforms and CI. `russh` is pure Rust — compiles everywhere with zero native deps. The async requirement is minimal (`#[tokio::main]` on main).
 
 Why `russh` is pinned to `=0.57.1`: as of April 2026 the latest `russh` (0.60.0) pulls in `internal-russh-forked-ssh-key` → `p256 0.14.0-rc.8`, which fails to compile against the rc.30+ series of `elliptic-curve` / `primeorder`. Pin back to 0.57.1 until the rc series stabilizes.
 
-Why `anyhow` + `thiserror`: internal fallible code returns `anyhow::Result<T>`. Errors that need specific JSON codes are attached via `anyhow::Error::new(CliError::…)`; the top-level `execute` in each command downcasts at the output boundary. Generic errors fall through to `CliError::IoError`. This keeps propagation ergonomic while preserving the structured error contract for agent consumers.
+Why `anyhow` + `thiserror`: shared crates expose structured error enums (`TabletError`, `MetadataError`, `RmError`) so callers can match failures without downcasting. The CLI still uses `anyhow` in command glue where contextual propagation is more useful than adding another public error type; output conversion ends in `CliError` and stable JSON error codes.
 
 No `async-trait`: edition 2024 supports native `async fn` in traits. The trait uses plain `async fn` without explicit `Send` bounds — nothing in the crate spawns tasks, so `Send` is unnecessary.
 
@@ -278,7 +264,7 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 
 ### +Phase 1: Foundation
 1. + **Project scaffolding + CLI skeleton** — Cargo.toml deps, clap derive structs for all commands, main.rs dispatch, output.rs, error.rs. Deliverable: `remarkable-cli --help` works for all subcommands.
-2. + **`TabletConnection` trait + SSH implementation + config** — connection.rs (trait + `SshConnection`), config.rs, `FakeConnection` for tests. Deliverable: `remarkable-cli connect` works.
+2. + **`TabletConnection` trait + SSH implementation + config** — `remarkable-tablet` connection modules, config.rs, `FakeConnection` for tests. Deliverable: `remarkable-cli connect` works.
 3. + **Metadata parsing + document tree** — metadata.rs serde structs, tablet.rs (read all metadata via trait), tree.rs, path_resolver.rs + unit tests using fixtures. Deliverable: internal library represents full document tree.
 4. + **Browse commands** — `ls` (with `--tree`/`--recursive`), `info`, `find`. Deliverable: full read-only browsing with tests.
 
@@ -291,12 +277,12 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 8. +**Mutation commands** — `mv`, `mkdir`, `rename` with xochitl stop/restart. Deliverable: reorganize tablet files.
 9. +**Deletion commands** — `rm` (soft + permanent). Deliverable: complete file lifecycle.
 
-### Phase 4: Rendering *(deferred — not in MVP)*
+### +Phase 4: Rendering
 +Preparation:
  - +split into workspace with crates:
     - +`remarkable-metadata`: pure-data parsing of `.metadata`/`.content`, document tree, path resolver (publishable)
     - +`remarkable-tablet`: SSH/SFTP client, file ops, xochitl control; depends on `remarkable-metadata`
-    - +`remarkable-rm`: stub for the `.rm` binary format work below (publishable)
+    - +`remarkable-rm`: `.rm` binary parser and renderer (publishable)
     - +`remarkable-cli`: clap surface and commands; depends on the three above
     - +`FakeConnection` lives behind a `test-utils` feature on `remarkable-tablet`, so `tempfile`/`filetime` are no longer runtime deps of the CLI
 10. +**.rm v6 binary parser** — Parse v6 stroke data into a `Page { layers, text, paper_size }`. Slice-based `Reader<'a>` with bounded sub-readers; type-system rejects invalid pen/color/tag values. Four real-tablet v6 fixtures (`smoke`, `pens-small`, `edits`, `layers`) drive integration tests; ground truth in `crates/remarkable-rm/tests/fixtures/README.md`.
@@ -313,7 +299,7 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 ### Phase 5: Polish
 12. **Deferred commands** — `recent`, `purge`, `restart`, hostname auto-discovery.
 13. **PDF/ePub background compositing** — Render source document pages under stroke layers (optional enhancement).
-14. **CI + release pipeline** — GitHub Actions, cross-compilation, README.
+14. **Release pipeline** — cross-compilation, binary artifacts, release notes.
 15. Publishing:
     - cli: installing via cargo install and/or archlinux AUR
     - binary parser on crates.io

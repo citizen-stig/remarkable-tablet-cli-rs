@@ -344,15 +344,48 @@ impl TabletConnection for SshConnection {
                 op: format!("exec `{command}`"),
                 source,
             })?;
-        let mut buf = Vec::new();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit_status = None;
+        let mut exit_signal = None;
         while let Some(msg) = channel.wait().await {
             match msg {
-                ChannelMsg::Data { ref data } => buf.extend_from_slice(data),
-                ChannelMsg::ExitStatus { .. } | ChannelMsg::Eof => break,
+                ChannelMsg::Data { ref data } => stdout.extend_from_slice(data),
+                ChannelMsg::ExtendedData { ref data, .. } => stderr.extend_from_slice(data),
+                ChannelMsg::ExitStatus {
+                    exit_status: status,
+                } => exit_status = Some(status),
+                ChannelMsg::ExitSignal {
+                    signal_name,
+                    core_dumped,
+                    error_message,
+                    ..
+                } => {
+                    exit_signal = Some((format!("{signal_name:?}"), core_dumped, error_message));
+                }
+                ChannelMsg::Close => break,
                 _ => {}
             }
         }
-        String::from_utf8(buf).map_err(|source| TabletError::CommandOutputNotUtf8 { source })
+        if let Some((signal_name, core_dumped, message)) = exit_signal {
+            return Err(TabletError::CommandTerminated {
+                command: command.to_string(),
+                signal_name,
+                core_dumped,
+                message,
+            });
+        }
+        if let Some(exit_status) = exit_status
+            && exit_status != 0
+        {
+            return Err(TabletError::CommandFailed {
+                command: command.to_string(),
+                exit_status,
+                stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            });
+        }
+        String::from_utf8(stdout).map_err(|source| TabletError::CommandOutputNotUtf8 { source })
     }
 
     async fn file_exists(&self, path: &str) -> Result<bool, TabletError> {

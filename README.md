@@ -245,7 +245,7 @@ The error contract (codes like `connection_failed`, `auth_failed`,
 - There is no `restore` command yet — backups are one-way until the next
   release.
 
-See [`PRODUCTION_NOTES_CODEX.md`](PRODUCTION_NOTES_CODEX.md) for the full
+See [`PRODUCTION_NOTES.md`](PRODUCTION_NOTES.md) for the full
 production-readiness roadmap and [`CHANGELOG.md`](CHANGELOG.md) for release
 history.
 

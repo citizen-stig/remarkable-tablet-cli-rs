@@ -385,7 +385,7 @@ pub struct ReadArgs {
     pub output: Option<PathBuf>,
 
     /// Page range for notebooks (e.g., "1-5" or "1,3,7"). 1-indexed.
-    /// Ignored for PDF/ePub.
+    /// Invalid for PDF/ePub.
     #[arg(long)]
     pub pages: Option<PageSelection>,
 }

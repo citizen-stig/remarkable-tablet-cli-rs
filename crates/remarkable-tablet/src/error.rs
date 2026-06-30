@@ -64,6 +64,26 @@ pub enum TabletError {
         source: std::string::FromUtf8Error,
     },
 
+    #[error(
+        "remote command `{command}` exited with status {exit_status}; stdout: {stdout:?}; stderr: {stderr:?}"
+    )]
+    CommandFailed {
+        command: String,
+        exit_status: u32,
+        stdout: String,
+        stderr: String,
+    },
+
+    #[error(
+        "remote command `{command}` terminated by signal {signal_name} (core dumped: {core_dumped}); message: {message:?}"
+    )]
+    CommandTerminated {
+        command: String,
+        signal_name: String,
+        core_dumped: bool,
+        message: String,
+    },
+
     /// Output of a remote shell command did not match the expected shape
     /// (e.g. `df -k` produced fewer fields than a row).
     #[error("unexpected output of `{command}`: {message}")]

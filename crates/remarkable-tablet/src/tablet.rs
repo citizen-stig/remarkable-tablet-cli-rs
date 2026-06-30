@@ -234,10 +234,10 @@ async fn fetch_disk<C: TabletConnection>(
     let _header = lines.next();
     let rest: String = lines.collect::<Vec<_>>().join(" ");
     let fields: Vec<&str> = rest.split_whitespace().collect();
-    if fields.len() < 4 {
+    if fields.len() < 5 {
         return Err(TabletError::CommandOutput {
             command: cmd,
-            message: format!("unexpected output: {out:?}"),
+            message: format!("expected at least 5 fields, got {}: {out:?}", fields.len()),
         });
     }
 
@@ -336,6 +336,19 @@ mod tests {
         assert_eq!(info.connection_type, ConnectionType::Wifi);
     }
 
+    #[tokio::test]
+    async fn fetch_disk_rejects_short_df_output() {
+        let conn = FakeConnection::new();
+        conn.set_command_output(
+            "df -k",
+            "Filesystem 1K-blocks Used Available Use% Mounted on\n/dev/root 1024 256 768\n",
+        );
+
+        let err = fetch_disk(&conn, "/anywhere").await.unwrap_err();
+        assert!(err.to_string().contains("got 4"));
+        assert!(err.to_string().contains("/dev/root"));
+    }
+
     #[test]
     fn shell_quote_basic() {
         assert_eq!(shell_single_quote("abc"), "'abc'");
@@ -365,6 +378,18 @@ mod tests {
                 "systemctl start xochitl".to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn stop_xochitl_surfaces_remote_command_failure() {
+        let conn = FakeConnection::new();
+        conn.set_command_error("systemctl stop xochitl", 1, "unit failed");
+
+        let err = stop_xochitl(&conn).await.unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("stop xochitl"));
+        assert!(message.contains("status 1"));
+        assert!(message.contains("unit failed"));
     }
 
     #[tokio::test]

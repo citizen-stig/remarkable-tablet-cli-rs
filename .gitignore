@@ -3,3 +3,5 @@
 .config/remarkable-cli/config.toml
 
 .idea/
+
+.DS_Store

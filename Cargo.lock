@@ -2066,14 +2066,12 @@ version = "0.1.0"
 dependencies = [
  "thiserror 2.0.18",
  "tiny-skia",
- "uuid",
 ]
 
 [[package]]
 name = "remarkable-tablet"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "filetime",
  "futures",
  "remarkable-metadata",
