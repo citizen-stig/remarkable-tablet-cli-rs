@@ -251,19 +251,117 @@ pub struct RawContent {
     pub page_count: Option<u32>,
     #[serde(default)]
     pub pages: Option<Vec<serde_json::Value>>,
+    /// Modern (`formatVersion: 2`, firmware 3.x) page container. Carries the
+    /// per-page template name that the legacy flat `pages` array does not.
+    /// Omitted when absent so legacy `.content` serialization is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_pages: Option<CPages>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CPages {
+    #[serde(default)]
+    pages: Vec<CPage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CPage {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    template: Option<LwwString>,
+    #[serde(default)]
+    deleted: Option<LwwInteger>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LwwString {
+    value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LwwInteger {
+    value: i32,
 }
 
 impl RawContent {
-    /// Best-effort page count: prefer the explicit `pageCount` field; fall
-    /// back to the length of the `pages` array; otherwise `None`.
+    /// Best-effort page count: prefer `pageCount`, then the legacy `pages`
+    /// array, then the live entries in `cPages`.
     #[must_use]
     pub fn effective_page_count(&self) -> Option<u32> {
-        self.page_count.or_else(|| {
-            self.pages
-                .as_ref()
-                .and_then(|p| u32::try_from(p.len()).ok())
+        self.page_count
+            .or_else(|| {
+                self.pages
+                    .as_ref()
+                    .and_then(|p| u32::try_from(p.len()).ok())
+            })
+            .or_else(|| {
+                self.c_pages
+                    .as_ref()
+                    .and_then(|_| u32::try_from(self.page_templates().len()).ok())
+            })
+    }
+
+    /// Per-page `(page_id, template_name)` pairs in document order.
+    ///
+    /// Prefers the modern `cPages` array, returning each non-deleted page's
+    /// id alongside its `template.value` (if recorded). Falls back to the
+    /// legacy flat `pages` array, where no template is stored so every entry
+    /// maps to `None`. The string `"Blank"` is returned verbatim — callers
+    /// decide it means "no background".
+    #[must_use]
+    pub fn page_templates(&self) -> Vec<(String, Option<String>)> {
+        if let Some(cpages) = &self.c_pages
+            && !cpages.pages.is_empty()
+        {
+            return cpages
+                .pages
+                .iter()
+                .filter(|p| p.deleted.as_ref().is_none_or(|deleted| deleted.value != 1))
+                .filter_map(|p| {
+                    let id = p.id.clone()?;
+                    let template = p.template.as_ref().map(|t| t.value.clone());
+                    Some((id, template))
+                })
+                .collect();
+        }
+        self.pages
+            .as_deref()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| page_id_from_value(item).map(|id| (id, None)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Page ids (UUIDs) in document order — preferring the modern `cPages`
+    /// list, falling back to the legacy flat `pages` array. `None` when neither
+    /// schema records any page. Used to order and select a notebook's `.rm`
+    /// page files; the modern path is what lets firmware-3.x notebooks order
+    /// correctly instead of falling back to a filename sort.
+    #[must_use]
+    pub fn ordered_page_ids(&self) -> Option<Vec<String>> {
+        (self.c_pages.is_some() || self.pages.is_some()).then(|| {
+            self.page_templates()
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect()
         })
     }
+}
+
+/// Extract a page UUID from a legacy flat `pages` entry: either a bare
+/// string id, or an object carrying `id`/`uuid`.
+fn page_id_from_value(item: &serde_json::Value) -> Option<String> {
+    if let Some(s) = item.as_str() {
+        return Some(s.to_string());
+    }
+    let obj = item.as_object()?;
+    obj.get("id")
+        .or_else(|| obj.get("uuid"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 // ---------------------------------------------------------------------------
@@ -686,6 +784,128 @@ mod tests {
         let json = r#"{"fileType": "notebook", "pageCount": 10, "pages": ["a","b","c"]}"#;
         let c = parse_content(json.as_bytes()).unwrap();
         assert_eq!(c.effective_page_count(), Some(10));
+    }
+
+    #[test]
+    fn parse_content_page_count_uses_live_cpages() {
+        let c = parse_content(
+            br#"{
+                "fileType": "notebook",
+                "cPages": { "pages": [
+                    { "id": "p1" },
+                    { "id": "p2", "deleted": { "value": 1 } },
+                    { "id": "p3", "deleted": { "value": 0 } }
+                ] }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(c.effective_page_count(), Some(2));
+    }
+
+    #[test]
+    fn page_templates_from_cpages() {
+        // Modern schema: per-page template, a Blank page, a page without a
+        // template register, a deleted page, and a restored page.
+        let json = r#"{
+            "fileType": "notebook",
+            "formatVersion": 2,
+            "cPages": { "pages": [
+                { "id": "p1", "template": { "timestamp": "1:1", "value": "P Lines medium" } },
+                { "id": "p2", "template": { "timestamp": "1:2", "value": "Blank" } },
+                { "id": "p3" },
+                { "id": "p4", "template": { "timestamp": "1:4", "value": "P Grid" }, "deleted": { "timestamp": "1:5", "value": 1 } },
+                { "id": "p5", "template": { "timestamp": "1:6", "value": "P Dots" }, "deleted": { "timestamp": "1:7", "value": 0 } }
+            ] }
+        }"#;
+        let c = parse_content(json.as_bytes()).unwrap();
+        assert_eq!(
+            c.page_templates(),
+            vec![
+                ("p1".to_string(), Some("P Lines medium".to_string())),
+                ("p2".to_string(), Some("Blank".to_string())),
+                ("p3".to_string(), None),
+                ("p5".to_string(), Some("P Dots".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn page_templates_prefers_cpages_over_flat_pages() {
+        let json = r#"{
+            "fileType": "notebook",
+            "pages": ["old1", "old2"],
+            "cPages": { "pages": [ { "id": "new1", "template": { "value": "P Dots" } } ] }
+        }"#;
+        let c = parse_content(json.as_bytes()).unwrap();
+        assert_eq!(
+            c.page_templates(),
+            vec![("new1".to_string(), Some("P Dots".to_string()))]
+        );
+    }
+
+    #[test]
+    fn page_templates_legacy_flat_pages_have_no_template() {
+        // String ids and object ids both yield a page with no template.
+        let json = r#"{"fileType": "notebook", "pages": ["a", {"id": "b"}, {"uuid": "c"}]}"#;
+        let c = parse_content(json.as_bytes()).unwrap();
+        assert_eq!(
+            c.page_templates(),
+            vec![
+                ("a".to_string(), None),
+                ("b".to_string(), None),
+                ("c".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn page_templates_empty_when_no_pages() {
+        let json = r#"{"fileType": "notebook"}"#;
+        let c = parse_content(json.as_bytes()).unwrap();
+        assert!(c.page_templates().is_empty());
+    }
+
+    #[test]
+    fn ordered_page_ids_prefers_cpages_and_skips_deleted() {
+        let json = r#"{
+            "fileType": "notebook",
+            "cPages": { "pages": [
+                { "id": "p1" },
+                { "id": "p2", "deleted": { "timestamp": "1:9", "value": 1 } },
+                { "id": "p3" },
+                { "id": "p4", "deleted": { "timestamp": "1:10", "value": 0 } }
+            ] }
+        }"#;
+        let c = parse_content(json.as_bytes()).unwrap();
+        assert_eq!(
+            c.ordered_page_ids(),
+            Some(vec!["p1".to_string(), "p3".to_string(), "p4".to_string()])
+        );
+    }
+
+    #[test]
+    fn ordered_page_ids_falls_back_to_flat_pages() {
+        let json = r#"{"fileType": "notebook", "pages": ["a", "b"]}"#;
+        let c = parse_content(json.as_bytes()).unwrap();
+        assert_eq!(
+            c.ordered_page_ids(),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn ordered_page_ids_none_when_no_pages_recorded() {
+        let c = parse_content(br#"{"fileType":"notebook"}"#).unwrap();
+        assert_eq!(c.ordered_page_ids(), None);
+    }
+
+    #[test]
+    fn ordered_page_ids_some_empty_when_cpages_records_no_live_pages() {
+        let c = parse_content(
+            br#"{"fileType":"notebook","cPages":{"pages":[{"id":"p1","deleted":{"value":1}}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.ordered_page_ids(), Some(Vec::new()));
     }
 
     #[test]

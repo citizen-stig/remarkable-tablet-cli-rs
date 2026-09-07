@@ -88,7 +88,7 @@ async fn run(ctx: &CommandContext, args: &BackupArgs) -> anyhow::Result<()> {
     let result = run_with_conn(&session.ssh, ctx.data_dir(), args).await;
     session.ssh.disconnect().await;
     let output = result?;
-    print_output(&output, ctx.format());
+    println!("{}", format_output(&output, ctx.format()));
     Ok(())
 }
 
@@ -232,10 +232,6 @@ fn walked_to_manifest_entry(f: &WalkedFile) -> ManifestEntry {
 fn systemtime_to_datetime(t: SystemTime) -> Option<DateTime<Utc>> {
     let dur = t.duration_since(SystemTime::UNIX_EPOCH).ok()?;
     DateTime::<Utc>::from_timestamp(i64::try_from(dur.as_secs()).ok()?, dur.subsec_nanos())
-}
-
-fn print_output(output: &BackupOutput, format: OutputFormat) {
-    println!("{}", format_output(output, format));
 }
 
 #[must_use]

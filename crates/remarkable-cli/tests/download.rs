@@ -6,11 +6,10 @@ use remarkable_cli::commands::download;
 use remarkable_cli::error::CliError;
 use remarkable_metadata::metadata::FileType;
 use remarkable_metadata::page_range::PageSelection;
-use remarkable_metadata::tree::DocumentTree;
 use remarkable_tablet::connection::FakeConnection;
-use remarkable_tablet::tablet::load_all_metadata;
 
-const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
+mod common;
+use common::{DATA_DIR, build_tree, downcast_cli};
 
 const FOLDER_UUID: &str = "aaaaaaaa-1111-1111-1111-111111111111";
 const DOC_PDF_UUID: &str = "bbbbbbbb-1111-1111-1111-111111111111";
@@ -146,21 +145,12 @@ fn populate(conn: &FakeConnection) {
     );
 }
 
-async fn build_tree(conn: &FakeConnection) -> DocumentTree {
-    let entries = load_all_metadata(conn, DATA_DIR).await.unwrap();
-    DocumentTree::build(entries)
-}
-
 fn args(path_or_uuid: &str, output: Option<PathBuf>, pages: Option<&str>) -> DownloadArgs {
     DownloadArgs {
         path_or_uuid: path_or_uuid.to_string(),
         output,
         pages: pages.map(|s| PageSelection::from_str(s).expect("valid page spec")),
     }
-}
-
-fn downcast_cli(err: anyhow::Error) -> CliError {
-    err.downcast::<CliError>().expect("expected CliError")
 }
 
 #[tokio::test]
@@ -497,7 +487,7 @@ async fn download_notebook_pages_requires_pages_array() {
     )
     .await
     .unwrap_err();
-    assert!(err.to_string().contains("pages array"));
+    assert!(err.to_string().contains("page order"));
 }
 
 #[tokio::test]

@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 remarkable-metadata = { workspace = true, features = ["clap"] }
-remarkable-rm.workspace = true
+remarkable-rm = { workspace = true, features = ["templates"] }
 remarkable-tablet.workspace = true
 
 anyhow.workspace = true

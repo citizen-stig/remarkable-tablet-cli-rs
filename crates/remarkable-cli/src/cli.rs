@@ -371,6 +371,18 @@ pub struct RenderArgs {
     /// instead of the tablet. Skips SSH entirely.
     #[arg(long)]
     pub from_backup: Option<PathBuf>,
+
+    /// Don't composite the page's paper template (lined/grid/dots) behind the
+    /// strokes; render on a plain white canvas instead.
+    #[arg(long)]
+    pub no_background: bool,
+
+    /// Directory of template files to use for backgrounds (e.g. a copy of the
+    /// tablet's `/usr/share/remarkable/templates`). Required to render
+    /// backgrounds with `--from-backup`; otherwise templates are fetched from
+    /// the tablet and cached.
+    #[arg(long)]
+    pub templates_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

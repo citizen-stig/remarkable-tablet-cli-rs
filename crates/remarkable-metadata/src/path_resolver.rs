@@ -84,7 +84,7 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> Result<Resolved<'
             }
             ChildLookup::Ambiguous => {
                 return Err(MetadataError::Ambiguous {
-                    name: (*segment).to_string(),
+                    name: segment.to_string(),
                     candidates: ambiguous_candidates(tree, &current_parent, segment),
                 });
             }

@@ -29,7 +29,7 @@ async fn run(ctx: &CommandContext, args: &InfoArgs) -> anyhow::Result<()> {
     let result = run_with_conn(&session.ssh, ctx.data_dir(), &tree, args).await;
     session.ssh.disconnect().await;
     let info = result?;
-    print_output(&info, ctx.format());
+    println!("{}", format_output(&info, ctx.format()));
     Ok(())
 }
 
@@ -42,17 +42,10 @@ pub async fn run_with_conn<C: TabletConnection>(
     tree: &DocumentTree,
     args: &InfoArgs,
 ) -> anyhow::Result<InfoOutput> {
-    if args.path_or_uuid == "/" {
-        return Err(CliError::InvalidPath(
-            "info on root is not supported; use 'ls /' instead".to_string(),
-        )
-        .into());
-    }
-
     let entry = match path_resolver::resolve(tree, &args.path_or_uuid)? {
         Resolved::Root => {
             return Err(CliError::InvalidPath(
-                "info on root is not supported; use 'ls /' instead".to_string(),
+                "cannot show info for root; use 'ls /' instead".to_string(),
             )
             .into());
         }
@@ -79,10 +72,6 @@ pub async fn run_with_conn<C: TabletConnection>(
         metadata,
         content,
     })
-}
-
-fn print_output(info: &InfoOutput, format: OutputFormat) {
-    println!("{}", format_output(info, format));
 }
 
 /// # Panics

@@ -269,28 +269,9 @@ async fn discover_host(global: &GlobalOptions, cfg: &ResolvedConfig) -> anyhow::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use crate::test_support::make_doc;
     use remarkable_metadata::metadata::{FileType, ItemKind, Parent};
     use remarkable_metadata::tree::DocumentTree;
-
-    fn make_doc(uuid: &str, name: &str, parent: Parent, file_type: FileType) -> DocumentEntry {
-        let deleted = parent == Parent::Trash;
-        DocumentEntry {
-            uuid: Uuid::parse_str(uuid).unwrap(),
-            visible_name: name.to_string(),
-            kind: ItemKind::Document {
-                file_type,
-                page_count: None,
-            },
-            parent,
-            deleted,
-            pinned: false,
-            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
-            version: 1,
-            tags: vec![],
-            last_opened: None,
-        }
-    }
 
     #[test]
     fn type_label_covers_all_kinds() {

@@ -56,7 +56,7 @@ async fn run(ctx: &CommandContext, args: &LsArgs) -> anyhow::Result<()> {
     let result = run_with_tree(&tree, args);
     session.ssh.disconnect().await;
     let output = result?;
-    print_output(&output, ctx.format());
+    println!("{}", format_output(&output, ctx.format()));
     Ok(())
 }
 
@@ -283,12 +283,8 @@ fn build_tree_children(
 // Output
 // ---------------------------------------------------------------------------
 
-fn print_output(out: &LsOutput, format: OutputFormat) {
-    println!("{}", format_output(out, format));
-}
-
-/// Render `out` to a string in the requested format. Used by `print_output`
-/// and by snapshot tests.
+/// Render `out` to a string in the requested format; also used directly by
+/// snapshot tests.
 ///
 /// # Panics
 /// Panics if `out` cannot be serialized as JSON.

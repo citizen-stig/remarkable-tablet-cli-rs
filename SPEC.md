@@ -134,13 +134,13 @@ Download a single document's source file (PDF, ePub) or .rm notebook files.
 ### 3.9 `remarkable-cli render <PATH_OR_UUID> [--pages <RANGE>]`
 Render .rm notebook pages to PNG.
 
-**Flags**: `--output <DIR>` [default: ./], `--pages <RANGE>` (e.g., `1-5` or `1,3,7`), `--width <PX>` [default: 1404], `--dpi <N>` [default: 226], `--from-backup <DIR>` (render from local backup instead of fetching)
+**Flags**: `--output <DIR>` [default: ./], `--pages <RANGE>` (e.g., `1-5` or `1,3,7`), `--width <PX>` [default: 1404], `--dpi <N>` [default: 226], `--from-backup <DIR>` (render from local backup instead of fetching), `--no-background` (skip the paper template, render on white), `--templates-dir <DIR>` (local template source for offline/backup renders)
 
-**Behavior**: Fetch `.rm` files from tablet (or read from backup), parse firmware-3 v6 stroke data, rasterize strokes to PNG. Each page is rendered as a **separate PNG file**: `<UUID>_page_<N>.png`.
+**Behavior**: Fetch `.rm` files from tablet (or read from backup), parse firmware-3 v6 stroke data, and rasterize strokes to PNG over the page's paper template (lined/grid/dots). Resolve page templates from modern `cPages` metadata, filling missing values by page position from `<UUID>.pagedata`. Each page is rendered as a **separate PNG file**: `<UUID>_page_<N>.png`. Templates are fetched from the tablet's `/usr/share/remarkable/templates` and cached locally; `--from-backup` needs `--templates-dir` (or a populated cache) since backups do not include the system template directory.
 
 **Output**: Array of `{ page, output_path, width, height }` — one entry per rendered page.
 
-Note: initial version renders strokes only. v3/v5 parsing, text-block rendering, and PDF/ePub background compositing are later enhancements.
+Note: paper-template backgrounds are composited; v3/v5 parsing, text-block rendering, and PDF/ePub background compositing are later enhancements.
 
 ### 3.9a `remarkable-cli read <PATH_OR_UUID>`
 One-step "consumable form" fetch so callers needn't know the raw-`.rm`-vs-render split: renders notebooks to PNG (like `render`), downloads PDFs/ePubs (like `download`), choosing by `fileType`.

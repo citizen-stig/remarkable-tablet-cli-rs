@@ -1,10 +1,15 @@
 //! Rasterize a parsed [`Page`] to a PNG image.
 //!
-//! Composites stroke layers only — no PDF/ePub backgrounds. Pen colors map
-//! to the fixed palette in spec §7.3; the highlighter is alpha-blended so
-//! overlapping highlight strokes don't fully obscure ink.
+//! Strokes are drawn over an optional background raster — a paper template via
+//! [`render_page_with_background`] and the `templates` feature, or plain white
+//! when none is supplied. Pen colors map to the fixed palette in spec §7.3; the
+//! highlighter is alpha-blended so overlapping highlight strokes don't fully
+//! obscure ink.
 
-use tiny_skia::{Color, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    Color, FilterQuality, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, PixmapRef,
+    Stroke, Transform,
+};
 
 use crate::document::{Layer, Page};
 use crate::scene::line::{Line, Pen, PenColor};
@@ -61,17 +66,61 @@ impl RenderOptions {
     }
 }
 
-/// Rasterize a parsed page into PNG-encoded bytes.
+/// A pre-decoded background raster to composite beneath the strokes — e.g. a
+/// notebook's paper template (lined/grid/dotted).
+///
+/// Pixels are **premultiplied** RGBA8 (`tiny-skia`'s native layout), row-major,
+/// exactly `width * height * 4` bytes. Build one with the decoders in
+/// [`crate::templates`] (behind the `templates` feature).
+#[derive(Debug, Clone)]
+pub struct BackgroundImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl BackgroundImage {
+    /// Copy a rasterized pixmap's premultiplied pixels into a `BackgroundImage`.
+    /// Used by the template decoders, which render into a `Pixmap`.
+    #[cfg(feature = "templates")]
+    pub(crate) fn from_pixmap(pixmap: &Pixmap) -> Self {
+        Self {
+            width: pixmap.width(),
+            height: pixmap.height(),
+            rgba: pixmap.data().to_vec(),
+        }
+    }
+}
+
+/// Rasterize a parsed page into PNG-encoded bytes (strokes on white).
 ///
 /// # Errors
 /// Returns an error if the canvas dimensions are zero or exceed
 /// `tiny-skia`'s allocation limit, or if the PNG encoder fails.
 pub fn render_page(page: &Page, opts: RenderOptions) -> Result<Vec<u8>, RenderError> {
+    render_page_with_background(page, opts, None)
+}
+
+/// Rasterize a parsed page, optionally compositing `background` beneath the
+/// strokes. With `background = None` this is identical to [`render_page`].
+///
+/// # Errors
+/// Returns an error if the canvas dimensions are zero or exceed
+/// `tiny-skia`'s allocation limit, or if the PNG encoder fails.
+pub fn render_page_with_background(
+    page: &Page,
+    opts: RenderOptions,
+    background: Option<&BackgroundImage>,
+) -> Result<Vec<u8>, RenderError> {
     let mut pixmap = Pixmap::new(opts.width, opts.height).ok_or(RenderError::InvalidCanvas {
         width: opts.width,
         height: opts.height,
     })?;
     pixmap.fill(Color::WHITE);
+
+    if let Some(bg) = background {
+        draw_background(&mut pixmap, bg, opts);
+    }
 
     let transform = page_to_canvas_transform(page, opts);
 
@@ -85,6 +134,25 @@ pub fn render_page(page: &Page, opts: RenderOptions) -> Result<Vec<u8>, RenderEr
     pixmap
         .encode_png()
         .map_err(|e| RenderError::Encode(e.to_string()))
+}
+
+/// Composite a background raster to fill the canvas, beneath the strokes.
+///
+/// Templates are authored at the device-canvas aspect, so the scale here is
+/// normally 1:1; the explicit scale guards against a cached raster being
+/// reused at a different output size (e.g. a `--width` override).
+#[allow(clippy::cast_precision_loss)]
+fn draw_background(pixmap: &mut Pixmap, bg: &BackgroundImage, opts: RenderOptions) {
+    let Some(bg_ref) = PixmapRef::from_bytes(&bg.rgba, bg.width, bg.height) else {
+        return;
+    };
+    let sx = opts.width as f32 / bg.width.max(1) as f32;
+    let sy = opts.height as f32 / bg.height.max(1) as f32;
+    let paint = PixmapPaint {
+        quality: FilterQuality::Bilinear,
+        ..PixmapPaint::default()
+    };
+    pixmap.draw_pixmap(0, 0, bg_ref, &paint, Transform::from_scale(sx, sy), None);
 }
 
 /// reMarkable stroke coordinates use a top-center origin: x = 0 is the page
@@ -290,6 +358,64 @@ mod tests {
             .filter(|p| p.red() < 0x40 && p.green() < 0x40 && p.blue() < 0x40)
             .count();
         assert!(dark_pixel_count > 100, "expected stroke ink on canvas");
+    }
+
+    #[test]
+    fn background_fills_canvas_beneath_strokes() {
+        // Opaque red fills every pixel (premultiplied == straight when a=0xFF).
+        let (w, h) = (40u32, 40u32);
+        let rgba: Vec<u8> = std::iter::repeat_n([0xFF, 0x00, 0x00, 0xFF], (w * h) as usize)
+            .flatten()
+            .collect();
+        let background = BackgroundImage {
+            width: w,
+            height: h,
+            rgba,
+        };
+        // One black stroke kept away from the (0,0) corner.
+        let line = line_with_points(
+            vec![point(-5.0, 10.0), point(10.0, 30.0)],
+            PenColor::Black,
+            Pen::FinelinerV2,
+        );
+        let page = page_with_lines(vec![line], Some((w, h)));
+        let png = render_page_with_background(
+            &page,
+            RenderOptions {
+                width: w,
+                height: h,
+            },
+            Some(&background),
+        )
+        .unwrap();
+        let decoded = Pixmap::decode_png(&png).unwrap();
+
+        // The corner (no ink) shows through as the background color, not white.
+        let corner = decoded.pixel(0, 0).unwrap();
+        assert_eq!(
+            (corner.red(), corner.green(), corner.blue()),
+            (0xFF, 0x00, 0x00),
+            "background should replace the white fill"
+        );
+        // The stroke still paints ink on top of the background.
+        let any_ink = decoded
+            .pixels()
+            .iter()
+            .any(|p| p.red() < 0x40 && p.green() < 0x40 && p.blue() < 0x40);
+        assert!(any_ink, "stroke should composite over the background");
+    }
+
+    #[test]
+    fn no_background_matches_plain_render() {
+        let line = line_with_points(
+            vec![point(-100.0, 50.0), point(100.0, 400.0)],
+            PenColor::Black,
+            Pen::FinelinerV2,
+        );
+        let page = page_with_lines(vec![line], None);
+        let plain = render_page(&page, RenderOptions::default()).unwrap();
+        let via_bg = render_page_with_background(&page, RenderOptions::default(), None).unwrap();
+        assert_eq!(plain, via_bg, "None background must equal render_page");
     }
 
     #[test]

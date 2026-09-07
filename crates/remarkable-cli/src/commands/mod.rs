@@ -12,4 +12,5 @@ pub mod read;
 pub mod rename;
 pub mod render;
 pub mod rm;
+mod templates;
 pub mod upload;

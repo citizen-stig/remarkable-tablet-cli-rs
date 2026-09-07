@@ -50,6 +50,26 @@ pub fn default_config_path() -> Option<PathBuf> {
     })
 }
 
+/// Local cache directory for paper templates fetched from the tablet:
+/// `$XDG_CACHE_HOME/remarkable-cli/templates`, or
+/// `$HOME/.cache/remarkable-cli/templates` when `XDG_CACHE_HOME` is unset or
+/// not absolute. `None` only when neither variable is available.
+#[must_use]
+pub fn default_template_cache_dir() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+        let xdg = PathBuf::from(xdg);
+        if xdg.is_absolute() {
+            return Some(xdg.join("remarkable-cli").join("templates"));
+        }
+    }
+    std::env::var_os("HOME").map(|h| {
+        PathBuf::from(h)
+            .join(".cache")
+            .join("remarkable-cli")
+            .join("templates")
+    })
+}
+
 /// # Errors
 /// Returns an error if the config file exists but cannot be read or parsed as TOML.
 pub fn load_file_config(path: Option<&Path>) -> anyhow::Result<FileConfig> {

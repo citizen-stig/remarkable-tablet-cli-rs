@@ -4,7 +4,8 @@ use remarkable_cli::cli::BackupArgs;
 use remarkable_cli::commands::backup::{self, BackupManifest};
 use remarkable_tablet::connection::FakeConnection;
 
-const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
+mod common;
+use common::DATA_DIR;
 
 const FOLDER_UUID: &str = "aaaaaaaa-1111-1111-1111-111111111111";
 const DOC_PDF_UUID: &str = "bbbbbbbb-1111-1111-1111-111111111111";

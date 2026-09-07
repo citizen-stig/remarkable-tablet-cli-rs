@@ -99,7 +99,7 @@ async fn run(ctx: &CommandContext, args: &ReadArgs) -> anyhow::Result<()> {
     let result = run_with_conn(&session.ssh, ctx.data_dir(), &tree, args).await;
     session.ssh.disconnect().await;
     let out = result?;
-    print_output(&out, ctx.format());
+    println!("{}", format_output(&out, ctx.format()));
     Ok(())
 }
 
@@ -151,6 +151,8 @@ pub async fn run_with_conn<C: TabletConnection>(
                 width: remarkable_rm::DEFAULT_WIDTH,
                 dpi: 226,
                 from_backup: None,
+                no_background: false,
+                templates_dir: None,
             };
             let rendered = render::run_with_conn(conn, data_dir, tree, &render_args).await?;
             Ok(ReadOutput::from_render(rendered))
@@ -171,10 +173,6 @@ pub async fn run_with_conn<C: TabletConnection>(
             Ok(ReadOutput::from_download(downloaded))
         }
     }
-}
-
-fn print_output(out: &ReadOutput, format: OutputFormat) {
-    println!("{}", format_output(out, format));
 }
 
 #[must_use]

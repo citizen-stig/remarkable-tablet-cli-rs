@@ -158,8 +158,7 @@ For PDFs and ePubs, the same command fetches the source file directly.
 remarkable-cli render "/Notebooks/Meeting Notes" --pages 1-5 --output ./renders/
 ```
 
-Each page is written as a separate PNG: `<UUID>_page_<N>.png`. Stroke layers
-only — PDF/ePub backgrounds are not yet composited (planned).
+Each page is written as a separate PNG: `<UUID>_page_<N>.png`. The page's paper template (lined/grid/dots) is composited behind the strokes so the render looks like the page does on the tablet; pass `--no-background` for a plain white canvas. Page templates are read from modern `cPages` metadata with `<UUID>.pagedata` as a fallback. Template images are fetched from the tablet and cached under `~/.cache/remarkable-cli/templates`; for `--from-backup` (offline) renders, point `--templates-dir` at a local copy of the tablet's `/usr/share/remarkable/templates`. PDF/ePub backgrounds are not yet composited.
 
 ### 5. Read a document in one step (handy for agents)
 

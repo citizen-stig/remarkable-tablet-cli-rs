@@ -17,11 +17,10 @@ use remarkable_cli::cli::RenderArgs;
 use remarkable_cli::commands::render;
 use remarkable_cli::error::CliError;
 use remarkable_metadata::page_range::PageSelection;
-use remarkable_metadata::tree::DocumentTree;
 use remarkable_tablet::connection::FakeConnection;
-use remarkable_tablet::tablet::load_all_metadata;
 
-const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
+mod common;
+use common::{DATA_DIR, build_tree, downcast_cli};
 
 const NOTEBOOK_UUID: &str = "cccccccc-1111-1111-1111-111111111111";
 const NOTEBOOK_GAPPED_UUID: &str = "cccccccc-2222-2222-2222-222222222222";
@@ -36,6 +35,7 @@ const GAPPED_PAGE_UUID_3: &str = "66666666-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const SMOKE_RM: &[u8] = include_bytes!("../../remarkable-rm/tests/fixtures/smoke.rm");
 const PENS_SMALL_RM: &[u8] = include_bytes!("../../remarkable-rm/tests/fixtures/pens-small.rm");
 const LAYERS_RM: &[u8] = include_bytes!("../../remarkable-rm/tests/fixtures/layers.rm");
+const SOLID_RED_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="#ff0000"/></svg>"##;
 
 fn populate(conn: &FakeConnection) {
     conn.mkdir(DATA_DIR);
@@ -98,11 +98,6 @@ fn populate(conn: &FakeConnection) {
     conn.set_file(&format!("{DATA_DIR}/{PDF_UUID}.pdf"), b"%PDF-stub");
 }
 
-async fn build_tree(conn: &FakeConnection) -> DocumentTree {
-    let entries = load_all_metadata(conn, DATA_DIR).await.unwrap();
-    DocumentTree::build(entries)
-}
-
 fn args(
     path_or_uuid: &str,
     output: Option<PathBuf>,
@@ -116,11 +111,9 @@ fn args(
         width: remarkable_rm::DEFAULT_WIDTH,
         dpi: 226,
         from_backup,
+        no_background: false,
+        templates_dir: None,
     }
-}
-
-fn downcast_cli(err: anyhow::Error) -> CliError {
-    err.downcast::<CliError>().expect("expected CliError")
 }
 
 fn assert_png(path: &Path) {
@@ -130,6 +123,39 @@ fn assert_png(path: &Path) {
         "{} is not a PNG",
         path.display()
     );
+}
+
+fn set_cpages_template(conn: &FakeConnection, template: &str) {
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_UUID}.content"),
+        format!(
+            r#"{{"fileType":"notebook","formatVersion":2,"cPages":{{"pages":[{{"id":"{PAGE_UUID_1}","template":{{"timestamp":"1:1","value":"{template}"}}}}]}}}}"#
+        ),
+    );
+}
+
+fn first_pixel(path: &Path) -> [u8; 4] {
+    let bytes = std::fs::read(path).unwrap();
+    let (width, height) = read_png_dims(path);
+    let image = remarkable_rm::templates::decode_png(&bytes, width, height).unwrap();
+    image.rgba[..4].try_into().unwrap()
+}
+
+fn solid_red_png() -> Vec<u8> {
+    let background = remarkable_rm::BackgroundImage {
+        width: 1,
+        height: 1,
+        rgba: vec![0xff, 0, 0, 0xff],
+    };
+    remarkable_rm::render_page_with_background(
+        &remarkable_rm::Page::default(),
+        remarkable_rm::RenderOptions {
+            width: 1,
+            height: 1,
+        },
+        Some(&background),
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -159,6 +185,92 @@ async fn render_notebook_writes_one_png_per_page() {
         assert_eq!(page.output_path, expected_path);
         assert_png(&expected_path);
     }
+}
+
+#[tokio::test]
+async fn render_composites_cpages_svg_template() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    set_cpages_template(&conn, "Test Red SVG");
+    let tree = build_tree(&conn).await;
+    let templates = tempfile::tempdir().unwrap();
+    std::fs::write(templates.path().join("Test Red SVG.svg"), SOLID_RED_SVG).unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let out_dir = dest.path().join("cpages-svg");
+    let mut render_args = args(NOTEBOOK_UUID, Some(out_dir), Some("1"), None);
+    render_args.templates_dir = Some(templates.path().to_path_buf());
+
+    let out = render::run_with_conn(&conn, DATA_DIR, &tree, &render_args)
+        .await
+        .unwrap();
+
+    assert_eq!(first_pixel(&out.pages[0].output_path), [0xff, 0, 0, 0xff]);
+}
+
+#[tokio::test]
+async fn render_no_background_ignores_cpages_template() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    set_cpages_template(&conn, "Test Red Disabled");
+    let tree = build_tree(&conn).await;
+    let dest = tempfile::tempdir().unwrap();
+    let out_dir = dest.path().join("no-background");
+    let mut render_args = args(NOTEBOOK_UUID, Some(out_dir), Some("1"), None);
+    render_args.no_background = true;
+
+    let out = render::run_with_conn(&conn, DATA_DIR, &tree, &render_args)
+        .await
+        .unwrap();
+
+    assert_eq!(first_pixel(&out.pages[0].output_path), [0xff; 4]);
+}
+
+#[tokio::test]
+async fn render_falls_back_to_png_when_svg_is_invalid() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    set_cpages_template(&conn, "Test Red PNG");
+    let tree = build_tree(&conn).await;
+    let templates = tempfile::tempdir().unwrap();
+    std::fs::write(templates.path().join("Test Red PNG.svg"), b"not SVG").unwrap();
+    std::fs::write(templates.path().join("Test Red PNG.png"), solid_red_png()).unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let out_dir = dest.path().join("png-fallback");
+    let mut render_args = args(NOTEBOOK_UUID, Some(out_dir), Some("1"), None);
+    render_args.templates_dir = Some(templates.path().to_path_buf());
+
+    let out = render::run_with_conn(&conn, DATA_DIR, &tree, &render_args)
+        .await
+        .unwrap();
+
+    assert_eq!(first_pixel(&out.pages[0].output_path), [0xff, 0, 0, 0xff]);
+}
+
+#[tokio::test]
+async fn render_uses_pagedata_for_legacy_page_templates() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_UUID}.pagedata"),
+        b"Test Pagedata Red\nBlank\n\n",
+    );
+    let tree = build_tree(&conn).await;
+    let templates = tempfile::tempdir().unwrap();
+    std::fs::write(
+        templates.path().join("Test Pagedata Red.svg"),
+        SOLID_RED_SVG,
+    )
+    .unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let out_dir = dest.path().join("pagedata");
+    let mut render_args = args(NOTEBOOK_UUID, Some(out_dir), Some("1"), None);
+    render_args.templates_dir = Some(templates.path().to_path_buf());
+
+    let out = render::run_with_conn(&conn, DATA_DIR, &tree, &render_args)
+        .await
+        .unwrap();
+
+    assert_eq!(first_pixel(&out.pages[0].output_path), [0xff, 0, 0, 0xff]);
 }
 
 #[tokio::test]
@@ -347,7 +459,7 @@ async fn render_from_backup_reads_local_directory() {
     std::fs::write(
         xochitl.join(format!("{NOTEBOOK_UUID}.content")),
         format!(
-            r#"{{"fileType":"notebook","pages":[{{"id":"{PAGE_UUID_1}"}},{{"id":"{PAGE_UUID_2}"}}]}}"#
+            r#"{{"fileType":"notebook","formatVersion":2,"cPages":{{"pages":[{{"id":"{PAGE_UUID_1}","template":{{"value":"Backup Red"}}}},{{"id":"{PAGE_UUID_2}","template":{{"value":"Blank"}}}}]}}}}"#
         ),
     )
     .unwrap();
@@ -358,13 +470,20 @@ async fn render_from_backup_reads_local_directory() {
 
     let dest_dir = tempfile::tempdir().unwrap();
     let out_dir = dest_dir.path().join("sketches");
-    let out = render::run_from_backup(
-        backup.path(),
-        &args(NOTEBOOK_UUID, Some(out_dir), None, None),
-    )
-    .await
-    .unwrap();
+    let templates = tempfile::tempdir().unwrap();
+    std::fs::write(templates.path().join("Backup Red.svg"), SOLID_RED_SVG).unwrap();
+    let mut render_args = args(
+        NOTEBOOK_UUID,
+        Some(out_dir),
+        None,
+        Some(backup.path().to_path_buf()),
+    );
+    render_args.templates_dir = Some(templates.path().to_path_buf());
+    let out = render::run_from_backup(backup.path(), &render_args)
+        .await
+        .unwrap();
     assert_eq!(out.pages.len(), 2);
+    assert_eq!(first_pixel(&out.pages[0].output_path), [0xff, 0, 0, 0xff]);
     for page in &out.pages {
         assert_png(&page.output_path);
     }
