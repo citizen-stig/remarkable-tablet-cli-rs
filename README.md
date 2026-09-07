@@ -60,6 +60,24 @@ reMarkable 2 ships with SSH built in — no jailbreak required.
 The USB connection exposes the tablet at `10.11.99.1` on a virtual network
 interface that appears when the cable is plugged in.
 
+For cable-free access after this initial connection, enable Wi-Fi SSH and mDNS once:
+
+```sh
+remarkable-cli setup-wifi
+```
+
+This exposes the tablet's root SSH service to devices on the same Wi-Fi network using its existing SSH authentication. It does not install another daemon or change passwords and authorized keys.
+
+To avoid hostname collisions when more than one tablet is present, choose a DNS label without `.local`:
+
+```sh
+remarkable-cli setup-wifi --name nikolai-notes
+```
+
+This changes the tablet's system hostname and saves `host = "nikolai-notes.local"` in the selected config while preserving its other fields and comments.
+
+reMarkable OS updates replace the root filesystem and reset the custom hostname. Rerun the same `setup-wifi --name` command after an update; it can reconnect through the default `remarkable.local` name when Wi-Fi SSH remains enabled.
+
 ---
 
 ## Install
@@ -106,7 +124,7 @@ commands.
 
 ## Connection & authentication
 
-**Connection** — `--host` is auto-discovered via USB. Override for Wi-Fi:
+**Connection** — without `--host`, the CLI tries USB (`10.11.99.1`), the configured host, and then `remarkable.local`. An explicit `--host` disables fallback:
 
 ```sh
 remarkable-cli --host 192.168.1.42 ls
@@ -122,9 +140,9 @@ remarkable-cli --host 192.168.1.42 ls
 Recommended: add your SSH public key to the tablet's `~/.ssh/authorized_keys`
 once, and you'll never need the password again.
 
-**Config file** (optional): `~/.config/remarkable-cli/config.toml` can store
-defaults for `host`, `user`, `key_file`, etc. Precedence is **CLI flag > env
-var > config file > built-in default**.
+**Config file** (optional): `.config/remarkable-cli/config.toml` in the current workspace or `~/.config/remarkable-cli/config.toml` can store defaults for `host`, `user`, `key_file`, etc. The workspace file wins when both exist; use `--config PATH` to select a file explicitly. Option precedence is **CLI flag > env var > config file > built-in default**.
+
+After default `setup-wifi` succeeds, remove any obsolete numeric `host` from the config so the CLI does not wait for that address to time out before trying `remarkable.local`. A custom `--name` replaces that config value automatically.
 
 ---
 
@@ -183,21 +201,22 @@ The folder must already exist; create it with
 
 ## Command reference
 
-| Command   | What it does                                                    |
-| --------- | --------------------------------------------------------------- |
-| `connect` | Test connectivity, print device info (firmware, battery, disk). |
-| `ls`      | List a folder. `--tree` for recursive indented output.          |
-| `info`    | Full metadata dump for one document or folder.                  |
-| `find`    | Search documents by name pattern.                               |
-| `backup`  | Recursive SFTP copy of the xochitl data directory.              |
-| `download`| Fetch a document's source file or raw `.rm` pages.              |
-| `upload`  | Upload PDF or ePub files to the tablet.                         |
-| `render`  | Rasterize notebook pages to PNG.                                |
-| `read`    | One step: render notebooks to PNG, download PDFs/ePubs as-is.    |
-| `mkdir`   | Create a folder. `--parents/-p` for intermediates.              |
-| `mv`      | Move a document or folder.                                      |
-| `rename`  | Rename a document or folder.                                    |
-| `rm`      | Delete (soft by default; `--permanent` skips trash).            |
+| Command      | What it does                                                    |
+| ------------ | --------------------------------------------------------------- |
+| `connect`    | Test connectivity, print device info (firmware, battery, disk). |
+| `setup-wifi` | Enable Wi-Fi SSH and `remarkable.local` discovery.                |
+| `ls`         | List a folder. `--tree` for recursive indented output.          |
+| `info`       | Full metadata dump for one document or folder.                  |
+| `find`       | Search documents by name pattern.                               |
+| `backup`     | Recursive SFTP copy of the xochitl data directory.              |
+| `download`   | Fetch a document's source file or raw `.rm` pages.              |
+| `upload`     | Upload PDF or ePub files to the tablet.                         |
+| `render`     | Rasterize notebook pages to PNG.                                |
+| `read`       | One step: render notebooks to PNG, download PDFs/ePubs as-is.    |
+| `mkdir`      | Create a folder. `--parents/-p` for intermediates.              |
+| `mv`         | Move a document or folder.                                      |
+| `rename`     | Rename a document or folder.                                    |
+| `rm`         | Delete (soft by default; `--permanent` skips trash).            |
 
 For full flag documentation, see [`SPEC.md`](SPEC.md) or run
 `remarkable-cli <command> --help`.
@@ -236,7 +255,7 @@ The error contract (codes like `connection_failed`, `auth_failed`,
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
 | `connection_failed` over USB   | USB cable not connected, or the tablet's USB-network interface is down. Replug.                                          |
 | `auth_failed`                  | Password from Settings changed, or `--key-file` doesn't match an entry in `~/.ssh/authorized_keys` on the tablet.        |
-| Hostname-based discovery fails | Use the explicit `10.11.99.1` (USB) or the Wi-Fi IP from the tablet's Settings.                                          |
+| Wi-Fi connection fails         | Connect over USB and rerun `remarkable-cli setup-wifi`; the Wi-Fi must permit mDNS and traffic between clients.          |
 | Notebook renders empty         | Only firmware-3 v6 stroke files are supported; older formats currently fail with `UnsupportedVersion`.                   |
 
 ---

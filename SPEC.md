@@ -23,6 +23,7 @@ A standalone Rust CLI tool for LLM agents (and humans) to interact with a reMark
 remarkable-cli [GLOBAL OPTIONS] <COMMAND>
 
   --host <HOST>        Tablet IP/hostname [default: auto-discover]
+  --config <PATH>      Config file path
   --port <PORT>        SSH port [default: 22]
   --user <USER>        SSH username [default: root]
   --password <PASS>    SSH password (or REMARKABLE_PASSWORD env var)
@@ -36,13 +37,14 @@ remarkable-cli [GLOBAL OPTIONS] <COMMAND>
 ```
 
 **Auto-discovery** (when `--host` is omitted):
-1. Read `~/.config/remarkable-cli/config.toml` for saved host
-2. Try TCP connect to `10.11.99.1:22` (USB) with 2s timeout
-3. Fail with clear error and instructions
+1. Try a full SSH connection to `10.11.99.1` over USB
+2. Try the configured host, if present and different from the USB address
+3. Try `remarkable.local` through mDNS
+4. Report every failed target
 
-*Note*: hostname-based discovery (`remarkable` / `remarkable.local`) deferred to a later release — config file + USB IP covers the majority of setups.
+An explicit `--host` disables fallback and tries only that host.
 
-**Config file** (`~/.config/remarkable-cli/config.toml`): optional, stores defaults for host/user/password/key-file/format. Precedence: CLI flags > env vars > config file > built-in defaults.
+**Config file**: `.config/remarkable-cli/config.toml` in the current workspace or `~/.config/remarkable-cli/config.toml` stores defaults for host/user/password/key-file/format. The workspace file wins when both exist; `--config <PATH>` selects a file explicitly. Precedence: CLI flags > env vars > config file > built-in defaults.
 
 **Auth** (tried in order):
 1. SSH agent (keys added via `ssh-add`) — no config needed
@@ -64,6 +66,15 @@ Sibling names are kept unique: mutating commands refuse to create a duplicate na
 Test connectivity, print device info.
 
 **Output**: `{ host, connection_type (usb|wifi), firmware_version, battery_percent, disk_total_mb, disk_used_mb, disk_free_mb }`
+
+### 3.1a `remarkable-cli setup-wifi`
+Connect through normal discovery, enable the tablet's built-in Wi-Fi SSH socket and systemd-resolved mDNS publication, then verify SSH through the selected hostname (`remarkable.local` by default). USB is required only when Wi-Fi SSH is not already enabled.
+
+**Flags**: `--name <LABEL>` changes the tablet system hostname, verifies `<label>.local`, and stores that host in the selected config. The label is lowercased and must be a valid 1-63 character DNS label without `.local`.
+
+An OS update resets the custom system hostname. Rerunning `setup-wifi --name <LABEL>` reapplies it through normal discovery.
+
+**Output**: `{ host, wifi_ssh_enabled, mdns_enabled }`
 
 ### 3.2 `remarkable-cli ls [PATH_OR_UUID]`
 List folder contents (default: root). Shows one level by default.
@@ -297,7 +308,7 @@ Custom .rm parser over external crate: format is small and well-specified, avoid
 11. +**PNG rendering** — Rasterize strokes, `remarkable-cli render` command. Deliverable: PNG output of notebook pages.
 
 ### Phase 5: Polish
-12. **Deferred commands** — `recent`, `purge`, `restart`, hostname auto-discovery.
+12. **Deferred commands** — `recent`, `purge`, `restart`.
 13. **PDF/ePub background compositing** — Render source document pages under stroke layers (optional enhancement).
 14. **Release pipeline** — cross-compilation, binary artifacts, release notes.
 15. Publishing:

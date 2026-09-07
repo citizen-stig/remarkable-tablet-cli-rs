@@ -6,11 +6,7 @@ use crate::connection::TabletConnection;
 use crate::error::TabletError;
 use remarkable_metadata::metadata::{self, DocumentEntry};
 
-/// Maximum concurrent SFTP read requests during metadata loading.
-///
-/// SFTP multiplexes by request ID, so many can be in-flight on a single
-/// session. 16 keeps the OpenSSH server's window saturated without
-/// overwhelming a USB-attached tablet.
+/// Maximum concurrent metadata entries loaded over SFTP.
 const READ_CONCURRENCY: usize = 16;
 
 /// Diagnostic summary of a [`load_all_metadata_full`] run.
@@ -105,10 +101,7 @@ async fn load_one<C: TabletConnection>(
     uuid: uuid::Uuid,
 ) -> Result<LoadOutcome, TabletError> {
     let meta_path = format!("{data_dir}/{uuid}.metadata");
-    let content_path = format!("{data_dir}/{uuid}.content");
-    let (meta_res, content_res) =
-        tokio::join!(conn.read_file(&meta_path), conn.read_file(&content_path));
-    let meta_bytes = meta_res?;
+    let meta_bytes = conn.read_file(&meta_path).await?;
     let raw = match metadata::parse_metadata(&meta_bytes) {
         Ok(metadata) => metadata,
         Err(err) => {
@@ -120,7 +113,8 @@ async fn load_one<C: TabletConnection>(
     };
 
     let content = if raw.item_type == remarkable_metadata::metadata::ItemType::Document {
-        let bytes = match content_res {
+        let content_path = format!("{data_dir}/{uuid}.content");
+        let bytes = match conn.read_file(&content_path).await {
             Ok(bytes) => bytes,
             Err(err) => return Ok(LoadOutcome::ContentReadFail(uuid, err.to_string())),
         };

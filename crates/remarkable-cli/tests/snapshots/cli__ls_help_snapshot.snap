@@ -11,18 +11,19 @@ Arguments:
   [PATH_OR_UUID]  Path or UUID to list (default: root)
 
 Options:
-      --host <host>          Tablet IP/hostname [auto-discover if omitted]
+      --config <CONFIG>      Config file path
   -r, --recursive            List recursively
       --depth <DEPTH>        Maximum depth for recursive listing
-      --port <port>          SSH port [default: 22]
+      --host <host>          Tablet IP/hostname [auto-discover if omitted]
       --include-trashed      Include trashed items
+      --port <port>          SSH port [default: 22]
+      --sort <SORT>          Sort order [possible values: name, modified, type]
       --user <user>          SSH username [default: root]
       --password <password>  SSH password (or set `REMARKABLE_PASSWORD` env var) [env: REMARKABLE_PASSWORD=]
-      --sort <SORT>          Sort order [possible values: name, modified, type]
-      --key-file <key_file>  SSH private key path [default: ~/.ssh/id_rsa]
       --tree                 Display as indented tree (like unix tree command)
-      --format <format>      Output format [default: human] [possible values: human, json]
+      --key-file <key_file>  SSH private key path [default: ~/.ssh/id_rsa]
       --kind <KIND>          Filter by entry kind [default: all] [possible values: all, documents, folders]
+      --format <format>      Output format [default: human] [possible values: human, json]
       --timeout <timeout>    SSH connection timeout in seconds [default: 5]
       --data-dir <data_dir>  Remote xochitl data directory path [default: /home/root/.local/share/remarkable/xochitl]
       --no-restart           Skip xochitl restart after mutating operations

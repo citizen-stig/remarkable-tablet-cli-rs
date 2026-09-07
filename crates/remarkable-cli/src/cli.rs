@@ -21,6 +21,10 @@ pub struct Cli {
 
 #[derive(Debug, Clone, Args)]
 pub struct GlobalOptions {
+    /// Config file path
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
+
     /// Tablet IP/hostname [auto-discover if omitted]
     #[arg(id = "host", long, global = true)]
     pub host: Option<String>,
@@ -142,6 +146,9 @@ pub enum Command {
     /// Test connectivity and print device info
     Connect,
 
+    /// Enable automatic Wi-Fi discovery and SSH access
+    SetupWifi(SetupWifiArgs),
+
     /// List folder contents
     Ls(LsArgs),
 
@@ -181,6 +188,36 @@ pub enum Command {
 }
 
 // -- Per-command args --
+
+#[derive(Debug, Args)]
+pub struct SetupWifiArgs {
+    /// mDNS hostname label to set (without .local)
+    #[arg(long, value_parser = parse_mdns_name)]
+    pub name: Option<String>,
+}
+
+fn parse_mdns_name(value: &str) -> Result<String, String> {
+    let name = value.to_ascii_lowercase();
+    let valid = !name.is_empty()
+        && name.len() <= 63
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        && name
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && name
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric);
+    if !valid {
+        return Err(format!(
+            "invalid mDNS name {value:?}: expected one 1-63 character ASCII letter, digit, or hyphen label that starts and ends with a letter or digit"
+        ));
+    }
+    Ok(name)
+}
 
 #[derive(Debug, Args)]
 pub struct LsArgs {
@@ -409,4 +446,24 @@ pub enum FindTypeFilter {
     Document,
     Folder,
     All,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mdns_name_is_canonicalized() {
+        assert_eq!(parse_mdns_name("My-Notes").unwrap(), "my-notes");
+    }
+
+    #[test]
+    fn mdns_name_rejects_non_labels() {
+        for name in ["", "notes.local", "-notes", "notes-", "notes_here", "nötes"] {
+            assert!(
+                parse_mdns_name(name).is_err(),
+                "expected {name:?} to be rejected"
+            );
+        }
+    }
 }

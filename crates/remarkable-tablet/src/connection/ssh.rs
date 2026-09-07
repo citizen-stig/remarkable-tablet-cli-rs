@@ -8,7 +8,7 @@ use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::fs::Metadata;
 use russh_sftp::protocol::FileType as SftpFileType;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
@@ -60,19 +60,24 @@ impl SshConnection {
     ) -> Result<Self, TabletError> {
         let addr = format!("{host}:{port}");
         let config = Arc::new(client::Config::default());
-        let mut handle = timeout(
-            opts.timeout,
-            client::connect(config, addr.as_str(), ClientHandler),
-        )
-        .await
-        .map_err(|_| TabletError::ConnectTimeout {
-            addr: addr.clone(),
-            timeout: opts.timeout,
-        })?
-        .map_err(|source| TabletError::Connect {
-            addr: addr.clone(),
-            source,
-        })?;
+        let connect = async {
+            let mut addresses: Vec<_> = tokio::net::lookup_host(addr.as_str())
+                .await
+                .map_err(russh::Error::from)?
+                .collect();
+            addresses.sort_by_key(std::net::SocketAddr::is_ipv6);
+            client::connect(config, addresses.as_slice(), ClientHandler).await
+        };
+        let mut handle = timeout(opts.timeout, connect)
+            .await
+            .map_err(|_| TabletError::ConnectTimeout {
+                addr: addr.clone(),
+                timeout: opts.timeout,
+            })?
+            .map_err(|source| TabletError::Connect {
+                addr: addr.clone(),
+                source,
+            })?;
 
         if !authenticate(&mut handle, opts).await {
             return Err(TabletError::AuthFailed(format!(
@@ -232,14 +237,29 @@ fn into_remote_metadata(meta: &Metadata) -> RemoteMetadata {
 
 impl TabletConnection for SshConnection {
     async fn read_file(&self, path: &str) -> Result<Vec<u8>, TabletError> {
-        self.sftp
-            .read(path)
+        let mut file = self
+            .sftp
+            .open(path)
+            .await
+            .map_err(|source| TabletError::Io {
+                op: "open",
+                path: path.to_string(),
+                source: IoSource::Sftp(source),
+            })?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)
             .await
             .map_err(|source| TabletError::Io {
                 op: "read",
                 path: path.to_string(),
-                source: IoSource::Sftp(source),
-            })
+                source: IoSource::Local(source),
+            })?;
+        file.shutdown().await.map_err(|source| TabletError::Io {
+            op: "close",
+            path: path.to_string(),
+            source: IoSource::Local(source),
+        })?;
+        Ok(data)
     }
 
     async fn write_file(&self, path: &str, data: &[u8]) -> Result<(), TabletError> {

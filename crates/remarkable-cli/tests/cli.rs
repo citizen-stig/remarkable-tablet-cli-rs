@@ -17,7 +17,17 @@ fn root_help_lists_every_subcommand() {
     let out = cli().arg("--help").assert().success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     for sub in [
-        "connect", "ls", "info", "find", "backup", "download", "upload", "mv", "mkdir", "rename",
+        "connect",
+        "setup-wifi",
+        "ls",
+        "info",
+        "find",
+        "backup",
+        "download",
+        "upload",
+        "mv",
+        "mkdir",
+        "rename",
         "rm",
     ] {
         assert!(
@@ -41,6 +51,27 @@ fn version_flag_succeeds() {
         .assert()
         .success()
         .stdout(str::contains("remarkable-cli"));
+}
+
+#[test]
+fn setup_wifi_help_mentions_discovery() {
+    cli().arg("--help").assert().success().stdout(str::contains(
+        "setup-wifi  Enable automatic Wi-Fi discovery and SSH access",
+    ));
+    cli()
+        .args(["setup-wifi", "--help"])
+        .assert()
+        .success()
+        .stdout(str::contains("--name <NAME>"));
+}
+
+#[test]
+fn setup_wifi_rejects_invalid_mdns_name_before_connecting() {
+    cli()
+        .args(["setup-wifi", "--name", "notes.local"])
+        .assert()
+        .failure()
+        .stderr(str::contains("invalid mDNS name \"notes.local\""));
 }
 
 #[test]

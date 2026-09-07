@@ -14,7 +14,11 @@ struct ParsedCli {
 
 pub async fn run() -> i32 {
     let parsed = ParsedCli::parse();
-    let ctx = match build_context(&parsed.cli.global, parsed.sources, None) {
+    let ctx = match build_context(
+        &parsed.cli.global,
+        parsed.sources,
+        parsed.cli.global.config.as_deref(),
+    ) {
         Ok(ctx) => ctx,
         Err(startup) => {
             output::print_error(&startup.error, startup.format);
@@ -34,6 +38,7 @@ pub async fn run() -> i32 {
 async fn dispatch(ctx: &CommandContext, command: &Command) -> Result<(), CliError> {
     match command {
         Command::Connect => commands::connect::execute(ctx).await,
+        Command::SetupWifi(args) => commands::setup_wifi::execute(ctx, args).await,
         Command::Ls(args) => commands::ls::execute(ctx, args).await,
         Command::Info(args) => commands::info::execute(ctx, args).await,
         Command::Find(args) => commands::find::execute(ctx, args).await,
@@ -99,6 +104,7 @@ mod tests {
 
     fn base_global() -> GlobalOptions {
         GlobalOptions {
+            config: None,
             host: None,
             port: DEFAULT_PORT,
             user: DEFAULT_USER.to_string(),
