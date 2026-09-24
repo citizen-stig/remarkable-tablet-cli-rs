@@ -1,6 +1,6 @@
 # remarkable-cli
 
-[![CI](https://github.com/nikolaygolub/remarkable-tablet-cli-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/nikolaygolub/remarkable-tablet-cli-rs/actions/workflows/ci.yml)
+[![CI](https://github.com/citizen-stig/remarkable-tablet-cli-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/citizen-stig/remarkable-tablet-cli-rs/actions/workflows/ci.yml)
 [![MSRV](https://img.shields.io/badge/MSRV-1.92-blue)](rust-toolchain.toml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
@@ -10,6 +10,14 @@ human-readable output by default, `--format json` for scripts and agents.
 
 This is **not** an MCP server — it's a unix-style CLI. For the full command
 reference, see [`SPEC.md`](SPEC.md).
+
+## Why this exists
+
+I wanted a scriptable way to inspect and back up files directly from my reMarkable tablet over SSH.
+
+## Trade-offs
+
+Using SSH avoids a cloud service dependency, but requires access to the tablet and supports only the tested reMarkable 2 firmware and file layout.
 
 ---
 
@@ -59,7 +67,7 @@ interface that appears when the cable is plugged in.
 ### From source (today)
 
 ```sh
-git clone https://github.com/nikolaygolub/remarkable-tablet-cli-rs
+git clone https://github.com/citizen-stig/remarkable-tablet-cli-rs
 cd remarkable-tablet-cli-rs
 cargo install --path crates/remarkable-cli
 ```
@@ -67,7 +75,7 @@ cargo install --path crates/remarkable-cli
 ### From git directly
 
 ```sh
-cargo install --git https://github.com/nikolaygolub/remarkable-tablet-cli-rs remarkable-cli
+cargo install --git https://github.com/citizen-stig/remarkable-tablet-cli-rs remarkable-cli
 ```
 
 ### Prebuilt binaries / `cargo install remarkable-cli`
@@ -244,10 +252,6 @@ The error contract (codes like `connection_failed`, `auth_failed`,
   host key regularly).
 - There is no `restore` command yet — backups are one-way until the next
   release.
-
-See [`PRODUCTION_NOTES.md`](PRODUCTION_NOTES.md) for the full
-production-readiness roadmap and [`CHANGELOG.md`](CHANGELOG.md) for release
-history.
 
 ---
 
