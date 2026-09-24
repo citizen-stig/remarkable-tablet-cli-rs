@@ -33,7 +33,7 @@ serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs"] }
-toml = { version = "0.8", default-features = false, features = ["parse"] }
+toml = { version = "1.1", default-features = false, features = ["parse"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # In-tree crates referenced by sibling crates.
