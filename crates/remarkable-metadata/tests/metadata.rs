@@ -12,7 +12,7 @@ fn fixture_folder_root() {
     assert!(!m.pinned);
     assert_eq!(m.last_modified.timestamp_millis(), 1_710_518_400_000);
     assert_eq!(m.version, 1);
-    assert!(m.tags.is_empty());
+    assert_eq!(m.tags, Vec::<String>::new());
     assert!(m.last_opened.is_none());
 }
 
@@ -57,7 +57,7 @@ fn fixture_doc_minimal() {
     let m = metadata::parse_metadata(data).unwrap();
     assert_eq!(m.visible_name, "Quick Note");
     assert_eq!(m.parent, Parent::Root);
-    assert!(m.tags.is_empty());
+    assert_eq!(m.tags, Vec::<String>::new());
     assert!(m.last_opened.is_none());
 }
 

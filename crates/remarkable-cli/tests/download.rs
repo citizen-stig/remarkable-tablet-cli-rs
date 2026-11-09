@@ -465,6 +465,30 @@ async fn download_notebook_pages_requires_readable_content() {
 }
 
 #[tokio::test]
+async fn download_notebook_pages_rejects_malformed_page_records() {
+    let conn = FakeConnection::new();
+    populate(&conn);
+    let tree = build_tree(&conn).await;
+    conn.set_file(
+        &format!("{DATA_DIR}/{NOTEBOOK_UUID}.content"),
+        format!(r#"{{"fileType":"notebook","pages":[null,"{PAGE_UUID_2}"]}}"#),
+    );
+    let dest_dir = tempfile::tempdir().unwrap();
+    let output = dest_dir.path().join("subset");
+
+    let err = download::run_with_conn(
+        &conn,
+        DATA_DIR,
+        &tree,
+        &args(NOTEBOOK_UUID, Some(output.clone()), Some("1")),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("parse notebook .content"));
+    assert!(!output.exists());
+}
+
+#[tokio::test]
 async fn download_notebook_pages_requires_pages_array() {
     let conn = FakeConnection::new();
     populate(&conn);

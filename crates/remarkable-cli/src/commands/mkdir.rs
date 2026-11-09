@@ -143,7 +143,7 @@ fn plan_creations(
                 }
                 current = Parent::Folder(e.uuid);
             }
-            ChildLookup::Ambiguous => {
+            ChildLookup::Ambiguous(_) => {
                 return Err(CliError::InvalidPath(format!(
                     "ambiguous: multiple items named '{segment}' in the same folder \
                      — use a UUID instead"

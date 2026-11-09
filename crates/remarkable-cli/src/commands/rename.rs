@@ -85,7 +85,7 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let warnings = match tree.lookup_child(&entry.parent, &args.new_name) {
         ChildLookup::Missing => vec![],
-        ChildLookup::Entry(_) | ChildLookup::Ambiguous => {
+        ChildLookup::Entry(_) | ChildLookup::Ambiguous(_) => {
             if !args.allow_duplicate {
                 return Err(CliError::AlreadyExists(format!(
                     "parent already contains an entry named '{}'; pass --allow-duplicate to override",
