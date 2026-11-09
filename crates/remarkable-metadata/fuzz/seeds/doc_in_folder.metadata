@@ -1,0 +1,12 @@
+{
+  "visibleName": "Meeting Notes",
+  "type": "DocumentType",
+  "parent": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "deleted": false,
+  "pinned": false,
+  "lastModified": 1710604800000,
+  "metadatamodified": 1710604800000,
+  "version": 1,
+  "tags": ["work", "meetings"],
+  "lastOpened": 1710604800000
+}
