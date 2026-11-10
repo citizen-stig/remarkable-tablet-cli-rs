@@ -1,6 +1,7 @@
 # remarkable-cli
 
 [![CI](https://github.com/citizen-stig/remarkable-tablet-cli-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/citizen-stig/remarkable-tablet-cli-rs/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/citizen-stig/remarkable-tablet-cli-rs/graph/badge.svg)](https://codecov.io/gh/citizen-stig/remarkable-tablet-cli-rs)
 [![MSRV](https://img.shields.io/badge/MSRV-1.92-blue)](rust-toolchain.toml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
