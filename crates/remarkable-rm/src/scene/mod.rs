@@ -4,3 +4,6 @@ pub mod items;
 pub mod line;
 pub mod text;
 pub mod tree;
+
+pub mod glyph;
+pub mod text_layout;

@@ -176,19 +176,17 @@ fn mixed_pressure_pencil_preserves_reference_ink_geometry() {
 }
 
 #[test]
-#[ignore = "known fidelity gap: median-width solid strokes do not reproduce pencil texture/pressure; see eink-sync corpus README"]
 fn heavy_pencil_matches_tablet_thumbnail() {
     compare_thumbnail("quicksheets-p2", 20.0);
 }
 
 #[test]
-#[ignore = "known fidelity gap: mixed-pressure pencil differs from tablet; see eink-sync corpus README"]
 fn mixed_pressure_pencil_matches_tablet_thumbnail() {
     compare_thumbnail("quicksheets-p3", 10.0);
 }
 
 #[test]
-#[ignore = "known format/rendering gap: paragraph style 10, typed text, RGBA and template background; see official sample README"]
+#[ignore = "invalid upstream pairing: PNG contains different text and additional strokes, and its template is missing; see official sample README"]
 fn official_export_matches_sample_page() {
     let case = root().join("conformance/rendering/tablet-exports/remarkable-rm/sample-page");
     let expected = Pixmap::load_png(case.join("sample-tablet-export.png")).unwrap();

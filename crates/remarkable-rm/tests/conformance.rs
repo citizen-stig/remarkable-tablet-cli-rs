@@ -104,3 +104,178 @@ fn paper_pro_color_tool_relationships_match_upstream() {
         "expected to exercise the colored ballpoint assertion, got colors: {seen:?}"
     );
 }
+
+fn text_paragraphs(name: &str) -> Vec<(ParagraphStyle, String)> {
+    fixture(name)
+        .text
+        .unwrap()
+        .layout()
+        .unwrap()
+        .paragraphs
+        .into_iter()
+        .map(|p| {
+            (
+                p.style,
+                p.spans.iter().map(|s| s.text.as_str()).collect::<String>(),
+            )
+        })
+        .filter(|(_, s)| !s.is_empty())
+        .collect()
+}
+
+#[test]
+fn concurrent_authors_reconstruct_text_in_upstream_order() {
+    assert_eq!(
+        text_paragraphs("test-crdt-ordering"),
+        vec![(ParagraphStyle::Heading, "A12_Z".into())]
+    );
+}
+
+#[test]
+fn text_paragraph_styles_match_upstream() {
+    assert_eq!(
+        text_paragraphs("Bold_Heading_Bullet_Normal"),
+        vec![
+            (ParagraphStyle::Bold, "A".into()),
+            (ParagraphStyle::Heading, "new line".into()),
+            (
+                ParagraphStyle::Bullet,
+                "B is a letter of the alphabet".into()
+            ),
+            (ParagraphStyle::Plain, "C".into()),
+        ]
+    );
+}
+
+#[test]
+fn inline_formatting_survives_deleted_character_ranges() {
+    let text = fixture("Normal_A_stroke_2_layers_v3.3.2").text.unwrap();
+    let paragraphs: Vec<String> = text
+        .layout()
+        .unwrap()
+        .paragraphs
+        .into_iter()
+        .map(|p| {
+            p.spans
+                .iter()
+                .map(|s| {
+                    let mut content = s.text.clone();
+                    if content.is_empty() {
+                        return content;
+                    }
+                    if s.bold {
+                        content = format!("<b>{content}</b>");
+                    }
+                    if s.italic {
+                        content = format!("<i>{content}</i>");
+                    }
+                    content
+                })
+                .collect::<String>()
+        })
+        .filter(|p| !p.is_empty())
+        .collect();
+    assert_eq!(
+        paragraphs,
+        [
+            "A",
+            "v3.2.2",
+            "Normal <b>bold</b> <i>italic</i>",
+            "<b>Bold</b> <i>italic</i> normal",
+            "Bold line",
+            "Normal line",
+            "Heading line"
+        ]
+    );
+}
+
+#[test]
+fn official_sample_decodes_numbering_colours_highlights_and_anchors() {
+    let bytes = include_bytes!(
+        "../../../conformance/rendering/tablet-exports/remarkable-rm/sample-page/sample-page.rm"
+    );
+    let page = parse_page(bytes).unwrap();
+    let text = page.text.as_ref().unwrap();
+    let layout = text.layout().unwrap();
+    // Independently confirmed with rmscene 0.8.0: 141 raw line blocks, 134 live.
+    assert_eq!(
+        page.layers
+            .iter()
+            .map(|layer| layer.lines.len())
+            .sum::<usize>(),
+        134
+    );
+    assert_eq!(
+        layout
+            .paragraphs
+            .iter()
+            .filter(|p| p.style == ParagraphStyle::Numbered)
+            .count(),
+        2
+    );
+    assert!(
+        page.layers
+            .iter()
+            .flat_map(|l| &l.lines)
+            .any(|line| line.color_rgba.is_some()),
+        "expected explicit stroke colours"
+    );
+    assert!(
+        page.layers.iter().any(|layer| !layer.glyphs.is_empty()),
+        "expected text highlight rectangles"
+    );
+    // This spelling is present in the source bytes, independently of layout;
+    // the official PNG's different spelling cannot be a renderer expectation.
+    assert!(
+        bytes
+            .windows(b" and hilight".len())
+            .any(|w| w == b" and hilight")
+    );
+    let paragraphs: Vec<String> = layout
+        .paragraphs
+        .iter()
+        .map(|p| p.spans.iter().map(|s| s.text.as_str()).collect())
+        .collect();
+    assert!(
+        paragraphs.iter().any(|p| p == "Text small and hilight"),
+        "got {paragraphs:?}"
+    );
+    assert!(
+        page.layers
+            .iter()
+            .flat_map(|l| &l.lines)
+            .flat_map(|l| &l.points)
+            .any(|p| p.y > 1872.0),
+        "expected anchored content below nominal screen"
+    );
+}
+
+#[test]
+fn typed_text_is_rendered_with_bundled_fonts() {
+    let page = fixture("Normal_AB");
+    let opts = remarkable_rm::RenderOptions::for_page(&page);
+    let png = remarkable_rm::render_page(&page, opts).unwrap();
+    let image = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    let ink: Vec<_> = image
+        .pixels()
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.red() < 200)
+        .map(|(i, _)| (i % 1404, i / 1404))
+        .collect();
+    assert!(
+        ink.len() > 50,
+        "expected AB glyphs, got {} ink pixels",
+        ink.len()
+    );
+    assert!(
+        ink.iter()
+            .all(|&(x, y)| (230..300).contains(&x) && (180..240).contains(&y)),
+        "unexpected text bounds: {ink:?}"
+    );
+    assert_eq!(
+        png,
+        remarkable_rm::render_page(&page, opts).unwrap(),
+        "text rasterization must be deterministic"
+    );
+}

@@ -21,33 +21,30 @@ ink. This prevents a blank page from passing because of large white margins:
 the `p3` blank control actually scores 6.16 under the original limit of 10.
 The ink thresholds are explicit conformance targets, not fitted to current output.
 
-## Current status: known fidelity failures
+## Current status: required comparisons pass
 
-The renderer uses median-width solid paths. It does not reproduce pencil texture
-or varying pressure. Initial measurements from this branch:
+The renderer now uses local pressure, speed, direction, and point width instead
+of median-width opaque strokes. Both full comparisons run in the default test
+suite with the original score limits and ink thresholds unchanged:
 
-| Case | Score | Maximum allowed | Status |
-| --- | ---: | ---: | --- |
-| `quicksheets-p2` | 54.02 | 20 | Fails |
-| `quicksheets-p3` | 19.28 | 10 | Fails |
+| Case | Previous score | Current score | Maximum allowed |
+| --- | ---: | ---: | ---: |
+| `quicksheets-p2` | 54.02 | 9.65 | 20 |
+| `quicksheets-p3` | 19.28 | 2.78 | 10 |
 
-The full appearance comparisons are explicitly `#[ignore]` with a reason. They
-are **not passing conformance tests**. Two default visual tests do compare actual
-renders against the references for ink geometry only, using the same 90% recall
-and precision targets: both currently pass (recall 1.00; precision 0.969 for p2,
-0.947 for p3). This establishes coarse stroke placement, not tone or texture.
-Default tests also validate the reference files and comparison metric (identity,
-blank output, missing strokes, and displacement).
-CI additionally runs the ignored comparisons in a non-blocking diagnostic step
-and uploads visual evidence; the defaults do not hide their measurements.
-
-Run the actual comparisons, including the separate official-export case:
+Ink recall is approximately 0.972 and 0.979, respectively; precision is 1.00
+for both. The default suite also tests the metric itself (identity, blank output,
+missing strokes, and displacement). These tolerances establish the stated
+comparison contract, not pixel-perfect pencil grain.
 
 ```sh
-cargo test -p remarkable-rm --test visual_conformance --locked -- --ignored --nocapture
+cargo test -p remarkable-rm --test visual_conformance --locked
 ```
 
-This command currently exits nonzero. On mismatch, expected/actual/difference
-PNGs are written to `target/conformance/rendering/<case>/`. Difference pixels are
-absolute RGB differences on black. Fix rendering, then remove the corresponding
-ignore; do not relax thresholds or regenerate references to pass the tests.
+On mismatch, expected/actual/difference PNGs are written to
+`target/conformance/rendering/<case>/`. Difference pixels are absolute RGB
+differences on black. References are immutable; do not regenerate them to pass.
+
+The separate official sample remains an opt-in diagnostic because its binary
+and PNG represent different page revisions. See that case's README for evidence;
+it is not a valid full-image fidelity oracle.

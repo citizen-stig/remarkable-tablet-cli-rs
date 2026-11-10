@@ -8,11 +8,12 @@ and rendering conformance. Imported corpora include
 [one official-export pair](rendering/tablet-exports/remarkable-rm/sample-page/README.md).
 Existing crate-local fixtures remain in place.
 
-Parser, metadata, two visual ink-geometry checks, and visual comparison controls
-run in the normal Rust test suite. Three full-appearance comparisons currently
-expose known fidelity/format failures and are explicitly ignored by default.
-CI runs them separately as non-blocking diagnostics with image artifacts. See
-the pencil corpus README for commands, metrics and current failure scores.
+Parser, metadata, pencil appearance and ink-geometry comparisons, and comparison
+controls run in the normal Rust test suite. The two pencil appearance tests now
+pass with unchanged thresholds. The official-export pair is quarantined as an
+invalid full-image oracle: the PNG and binary contain different page content
+(see its README for independent verification). It remains one ignored diagnostic
+with CI image artifacts, pending a matching source/export pair.
 
 ## Layout
 

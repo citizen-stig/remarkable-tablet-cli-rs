@@ -40,6 +40,12 @@ pub enum ParseError {
     #[error("invalid paragraph style: {0}")]
     InvalidParagraphStyle(u8),
 
+    #[error("invalid inline format code: {0}")]
+    InvalidInlineFormat(u32),
+
+    #[error("invalid text CRDT: {0}")]
+    InvalidText(String),
+
     #[error("invalid UTF-8 in string field")]
     InvalidUtf8,
 

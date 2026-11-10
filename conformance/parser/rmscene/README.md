@@ -15,7 +15,7 @@ Run it from the workspace root:
 cargo test -p remarkable-rm --test conformance --locked
 ```
 
-Every fixture has an individually named parser-acceptance test. Three additional
+Every fixture has an individually named parser-acceptance test. Additional semantic and text-rendering
 tests check independent upstream expectations rather than snapshotting this
 project's parser output:
 
@@ -53,10 +53,12 @@ by this import. A filename or canvas size alone is not treated as proof of model
 ## Limits of this first batch
 
 Acceptance means `parse_page` succeeds, not that every block is represented in
-the public `Page`. In particular, glyph highlights are currently skipped, and the
-concurrent-insert fixture does not yet assert reconstructed text ordering. These
-tests do not establish rendering fidelity, complete text semantics, or document
-metadata support. Other categories have their own tests and status in the
+the public `Page`. Additional checks now assert concurrent text order (`A12_Z`),
+paragraph styles and inline formatting against upstream's `test_text_files.py`,
+and verify deterministic glyph rasterization with bundled fonts. Glyph highlight
+rectangles are now retained. These tests do not establish complete text-layout
+fidelity (including document-specific font/spacing overrides) or document metadata
+support. Other categories have their own tests and status in the
 [conformance catalog](../../README.md).
 
 No Python package or network access is needed to run the Rust tests. Upstream

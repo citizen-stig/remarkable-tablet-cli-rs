@@ -31,3 +31,5 @@ pub use render::{
 pub use scene::line::{Line, Pen, PenColor, Point};
 #[cfg(feature = "templates")]
 pub use templates::{TemplateError, decode_template};
+
+mod render_text;

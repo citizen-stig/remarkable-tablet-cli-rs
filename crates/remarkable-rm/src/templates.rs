@@ -7,8 +7,8 @@
 //! the page canvas and is composited beneath the strokes by
 //! [`crate::render::render_page_with_background`].
 //!
-//! This module is gated behind the `templates` feature so the core crate stays
-//! `tiny-skia`-only.
+//! This module is gated behind the `templates` feature. The core renderer also
+//! uses `resvg` for deterministic typed text.
 
 use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 
