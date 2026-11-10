@@ -463,11 +463,12 @@ impl TabletConnection for SshConnection {
         // took ~0.9 s over SFTP vs ~0.3 s streamed on USB. `tail` headers are
         // ~60 bytes per file vs tar's 512 + padding, 14% fewer bytes, and the
         // tablet's cipher throughput is the bottleneck. Unmatched globs stay
-        // literal in sh, hence the guards.
+        // literal in sh, hence the guards; each glob of the ~2700-entry
+        // directory costs the tablet ~10 ms, so each pattern is expanded once.
         let dir = crate::tablet::shell_single_quote(dir);
         let command = format!(
-            "cd {dir} || exit 1; set -- *.metadata; [ -e \"$1\" ] || exit 0; \
-             [ \"$(echo *.content)\" = '*.content' ] || set -- \"$@\" *.content; \
+            "cd {dir} || exit 1; set -- *.content; [ -e \"$1\" ] || shift; \
+             set -- *.metadata \"$@\"; [ -e \"$1\" ] || exit 0; \
              exec tail -v -c +1 \"$@\""
         );
         let archive = self.exec_bytes(&command).await.map_err(|err| match err {
