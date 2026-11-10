@@ -44,16 +44,16 @@ pub struct SshConnection {
     /// calls are safe and allow many in-flight requests on a single channel.
     /// We keep no mutex here — that's the whole point of dropping the lock,
     /// since holding one across `await` was serializing every SFTP round-trip.
-    sftp: SftpSession,
+    /// Opened on first use: tree loads go through `exec` and never need it.
+    sftp: tokio::sync::OnceCell<SftpSession>,
     verbose: bool,
 }
 
 impl SshConnection {
     /// # Errors
     /// Returns [`TabletError::ConnectTimeout`] / [`TabletError::Connect`] on
-    /// TCP/DNS failure or connect timeout, [`TabletError::AuthFailed`] if no
-    /// auth method succeeds, or [`TabletError::Ssh`] if the SFTP subsystem
-    /// cannot be opened.
+    /// TCP/DNS failure or connect timeout, or [`TabletError::AuthFailed`] if no
+    /// auth method succeeds.
     pub async fn connect(
         host: &str,
         port: u16,
@@ -87,33 +87,45 @@ impl SshConnection {
             )));
         }
 
-        let channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|source| TabletError::Ssh {
-                op: "open sftp channel".to_string(),
-                source,
-            })?;
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|source| TabletError::Ssh {
-                op: "request sftp subsystem".to_string(),
-                source,
-            })?;
-        let sftp = SftpSession::new(channel.into_stream())
-            .await
-            .map_err(|source| TabletError::Io {
-                op: "start_session",
-                path: String::new(),
-                source: IoSource::Sftp(source),
-            })?;
-
         Ok(Self {
             handle: Mutex::new(handle),
-            sftp,
+            sftp: tokio::sync::OnceCell::new(),
             verbose: opts.verbose,
         })
+    }
+
+    /// # Errors
+    /// Returns [`TabletError::Ssh`] / [`TabletError::Io`] if the SFTP
+    /// subsystem cannot be opened.
+    async fn sftp(&self) -> Result<&SftpSession, TabletError> {
+        self.sftp
+            .get_or_try_init(|| async {
+                let channel = self
+                    .handle
+                    .lock()
+                    .await
+                    .channel_open_session()
+                    .await
+                    .map_err(|source| TabletError::Ssh {
+                        op: "open sftp channel".to_string(),
+                        source,
+                    })?;
+                channel
+                    .request_subsystem(true, "sftp")
+                    .await
+                    .map_err(|source| TabletError::Ssh {
+                        op: "request sftp subsystem".to_string(),
+                        source,
+                    })?;
+                SftpSession::new(channel.into_stream())
+                    .await
+                    .map_err(|source| TabletError::Io {
+                        op: "start_session",
+                        path: String::new(),
+                        source: IoSource::Sftp(source),
+                    })
+            })
+            .await
     }
 
     /// Send a best-effort SSH `disconnect`. Errors are logged under
@@ -339,7 +351,8 @@ fn parse_tail(stream: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 impl TabletConnection for SshConnection {
     async fn read_file(&self, path: &str) -> Result<Vec<u8>, TabletError> {
         let mut file = self
-            .sftp
+            .sftp()
+            .await?
             .open(path)
             .await
             .map_err(|source| TabletError::Io {
@@ -371,7 +384,8 @@ impl TabletConnection for SshConnection {
         // `CREATE | TRUNCATE | WRITE`, which is what we want for both new
         // writes and overwrites.
         let mut file = self
-            .sftp
+            .sftp()
+            .await?
             .create(path)
             .await
             .map_err(|source| TabletError::Io {
@@ -400,7 +414,8 @@ impl TabletConnection for SshConnection {
 
     async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, TabletError> {
         let dir = self
-            .sftp
+            .sftp()
+            .await?
             .read_dir(path)
             .await
             .map_err(|source| TabletError::Io {
@@ -418,7 +433,8 @@ impl TabletConnection for SshConnection {
 
     async fn stat(&self, path: &str) -> Result<RemoteMetadata, TabletError> {
         let meta = self
-            .sftp
+            .sftp()
+            .await?
             .metadata(path)
             .await
             .map_err(|source| TabletError::Io {
@@ -430,7 +446,8 @@ impl TabletConnection for SshConnection {
     }
 
     async fn remove_file(&self, path: &str) -> Result<(), TabletError> {
-        self.sftp
+        self.sftp()
+            .await?
             .remove_file(path)
             .await
             .map_err(|source| TabletError::Io {
@@ -495,7 +512,8 @@ impl TabletConnection for SshConnection {
     }
 
     async fn file_exists(&self, path: &str) -> Result<bool, TabletError> {
-        self.sftp
+        self.sftp()
+            .await?
             .try_exists(path)
             .await
             .map_err(|source| TabletError::Io {
