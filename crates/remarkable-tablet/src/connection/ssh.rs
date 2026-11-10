@@ -299,49 +299,41 @@ impl SshConnection {
     }
 }
 
-/// Minimal reader for the ustar archives `BusyBox` `tar -c` writes: regular
-/// files only, names up to 100 bytes, no compression. Returns
-/// `(basename without "./", contents)` pairs.
-fn parse_ustar(archive: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
-    const BLOCK: usize = 512;
+/// Splits the output of `BusyBox` `tail -v -c +1 FILE...` into
+/// `(name, contents)` pairs. Each file is preceded by `==> NAME <==\n`, and
+/// every header after the first by an extra `\n`. The split is unambiguous for
+/// JSON files: a raw newline followed by `==> ` never occurs in valid JSON.
+fn parse_tail(stream: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    const SEP: &[u8] = b"\n==> ";
+    const NAME_END: &[u8] = b" <==\n";
+    let find = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).position(|w| w == needle);
+    if stream.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut rest = stream.strip_prefix(&SEP[1..]).ok_or_else(|| {
+        format!(
+            "expected `==> ` header, got {:?}",
+            String::from_utf8_lossy(&stream[..stream.len().min(40)])
+        )
+    })?;
     let mut files = Vec::new();
-    let mut offset = 0;
-    while offset + BLOCK <= archive.len() {
-        let header = &archive[offset..offset + BLOCK];
-        if header.iter().all(|&b| b == 0) {
-            return Ok(files);
-        }
-        let field = |range: std::ops::Range<usize>| {
-            let raw = &header[range];
-            let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
-            String::from_utf8_lossy(&raw[..end]).into_owned()
-        };
-        let name = field(0..100);
-        let size_field = field(124..136);
-        let size = usize::from_str_radix(size_field.trim(), 8).map_err(|err| {
-            format!("tar header at offset {offset} for {name:?}: bad size {size_field:?}: {err}")
-        })?;
-        let data_start = offset + BLOCK;
-        let data = archive.get(data_start..data_start + size).ok_or_else(|| {
+    loop {
+        let name_len = find(rest, NAME_END).ok_or_else(|| {
             format!(
-                "tar entry {name:?} at offset {offset} claims {size} bytes, archive has {}",
-                archive.len().saturating_sub(data_start)
+                "unterminated header after {} files: {:?}",
+                files.len(),
+                String::from_utf8_lossy(&rest[..rest.len().min(80)])
             )
         })?;
-        if matches!(header[156], b'0' | 0) {
-            let name = name.strip_prefix("./").unwrap_or(&name).to_string();
-            files.push((name, data.to_vec()));
-        }
-        offset = data_start + size.div_ceil(BLOCK) * BLOCK;
+        let name = String::from_utf8_lossy(&rest[..name_len]).into_owned();
+        rest = &rest[name_len + NAME_END.len()..];
+        let Some(len) = find(rest, SEP) else {
+            files.push((name, rest.to_vec()));
+            return Ok(files);
+        };
+        files.push((name, rest[..len].to_vec()));
+        rest = &rest[len + SEP.len()..];
     }
-    if offset == archive.len() {
-        return Ok(files);
-    }
-    Err(format!(
-        "tar stream truncated: {} trailing bytes at offset {offset} of {}",
-        archive.len() - offset,
-        archive.len()
-    ))
 }
 
 impl TabletConnection for SshConnection {
@@ -467,16 +459,19 @@ impl TabletConnection for SshConnection {
         &self,
         dir: &str,
     ) -> Result<HashMap<String, Result<Vec<u8>, TabletError>>, TabletError> {
-        // One tar stream instead of an SFTP open/read/close per file: ~900
-        // files took ~0.9 s over SFTP vs ~0.3 s as tar on USB. The guard
-        // exists because BusyBox tar fails with "empty archive" on no input.
+        // One stream instead of an SFTP open/read/close per file: ~900 files
+        // took ~0.9 s over SFTP vs ~0.3 s streamed on USB. `tail` headers are
+        // ~60 bytes per file vs tar's 512 + padding, 14% fewer bytes, and the
+        // tablet's cipher throughput is the bottleneck. Unmatched globs stay
+        // literal in sh, hence the guards.
         let dir = crate::tablet::shell_single_quote(dir);
         let command = format!(
-            "cd {dir} || exit 1; [ -z \"$(find . -maxdepth 1 -name '*.metadata')\" ] || \
-             find . -maxdepth 1 \\( -name '*.metadata' -o -name '*.content' \\) | tar -cf - -T -"
+            "cd {dir} || exit 1; set -- *.metadata; [ -e \"$1\" ] || exit 0; \
+             [ \"$(echo *.content)\" = '*.content' ] || set -- \"$@\" *.content; \
+             exec tail -v -c +1 \"$@\""
         );
         let archive = self.exec_bytes(&command).await.map_err(|err| match err {
-            // stdout is a partial tar stream: megabytes of noise in an error message.
+            // stdout is a partial stream: megabytes of noise in an error message.
             TabletError::CommandFailed {
                 command,
                 exit_status,
@@ -485,12 +480,12 @@ impl TabletConnection for SshConnection {
             } => TabletError::CommandFailed {
                 command,
                 exit_status,
-                stdout: format!("<{} bytes of tar output omitted>", stdout.len()),
+                stdout: format!("<{} bytes of tail output omitted>", stdout.len()),
                 stderr,
             },
             other => other,
         })?;
-        let files = parse_ustar(&archive)
+        let files = parse_tail(&archive)
             .map_err(|message| TabletError::CommandOutput { command, message })?;
         Ok(files
             .into_iter()
@@ -512,47 +507,29 @@ impl TabletConnection for SshConnection {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ustar;
-
-    fn ustar_entry(name: &str, data: &[u8]) -> Vec<u8> {
-        let mut header = vec![0u8; 512];
-        header[..name.len()].copy_from_slice(name.as_bytes());
-        let size = format!("{:011o}\0", data.len());
-        header[124..136].copy_from_slice(size.as_bytes());
-        header[156] = b'0';
-        let mut out = header;
-        out.extend_from_slice(data);
-        out.resize(out.len().div_ceil(512) * 512, 0);
-        out
-    }
+    use super::parse_tail;
 
     #[test]
-    fn parses_two_files_and_strips_dot_slash() {
-        let big = vec![b'x'; 700];
-        let mut archive = ustar_entry("./a.metadata", b"{}");
-        archive.extend(ustar_entry("b.content", &big));
-        archive.extend(vec![0u8; 1024]);
-
-        let files = parse_ustar(&archive).unwrap();
+    fn parses_files_with_and_without_trailing_newline_and_empty() {
+        let stream = b"==> a.metadata <==\n{\n}\n\n==> b.content <==\n{}\n==> c.content <==\n";
         assert_eq!(
-            files,
+            parse_tail(stream).unwrap(),
             vec![
-                ("a.metadata".to_string(), b"{}".to_vec()),
-                ("b.content".to_string(), big),
+                ("a.metadata".to_string(), b"{\n}\n".to_vec()),
+                ("b.content".to_string(), b"{}".to_vec()),
+                ("c.content".to_string(), Vec::new()),
             ]
         );
     }
 
     #[test]
     fn empty_input_is_empty_listing() {
-        assert_eq!(parse_ustar(&[]).unwrap(), Vec::new());
+        assert_eq!(parse_tail(&[]).unwrap(), Vec::new());
     }
 
     #[test]
-    fn truncated_entry_reports_claimed_and_actual_size() {
-        let mut archive = ustar_entry("a.content", &[b'x'; 600]);
-        archive.truncate(512 + 100);
-        let err = parse_ustar(&archive).unwrap_err();
-        assert!(err.contains("claims 600 bytes, archive has 100"), "{err}");
+    fn missing_header_reports_what_was_received() {
+        let err = parse_tail(b"tail: can't open").unwrap_err();
+        assert!(err.contains("tail: can't open"), "{err}");
     }
 }
