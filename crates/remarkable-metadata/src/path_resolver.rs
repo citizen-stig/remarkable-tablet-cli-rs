@@ -82,10 +82,10 @@ pub fn resolve_path<'a>(tree: &'a DocumentTree, path: &str) -> Result<Resolved<'
                 }
                 current_parent = Parent::Folder(entry.uuid);
             }
-            ChildLookup::Ambiguous => {
+            ChildLookup::Ambiguous(entries) => {
                 return Err(MetadataError::Ambiguous {
-                    name: (*segment).to_string(),
-                    candidates: ambiguous_candidates(tree, &current_parent, segment),
+                    name: segment.to_string(),
+                    candidates: ambiguous_candidates(tree, entries),
                 });
             }
         }
@@ -107,7 +107,7 @@ fn lookup_leaf<'a>(tree: &'a DocumentTree, parent: &Parent, segment: &str) -> Ch
         return ChildLookup::Missing;
     };
 
-    let mut matches = tree.child_entries(parent).into_iter().filter(|entry| {
+    let matches = tree.child_entries(parent).into_iter().filter(|entry| {
         entry.visible_name == stem
             && matches!(
                 &entry.kind,
@@ -115,11 +115,7 @@ fn lookup_leaf<'a>(tree: &'a DocumentTree, parent: &Parent, segment: &str) -> Ch
             )
     });
 
-    match (matches.next(), matches.next()) {
-        (None, _) => ChildLookup::Missing,
-        (Some(entry), None) => ChildLookup::Entry(entry),
-        (Some(_), Some(_)) => ChildLookup::Ambiguous,
-    }
+    ChildLookup::from_matches(matches)
 }
 
 /// Split a recognized document extension off `name`. Returns `(stem, ext)`
@@ -136,40 +132,11 @@ fn strip_known_extension(name: &str) -> Option<(&str, &'static str)> {
     None
 }
 
-/// Collect the siblings under `parent` that a `ChildLookup::Ambiguous` for
-/// `segment` matched, as [`AmbiguousCandidate`]s. Mirrors [`lookup_leaf`]:
-/// literal `visible_name == segment` matches win; otherwise it falls back to
-/// the extension-stripped stem + matching `file_type` (so `Notes.pdf` lists the
-/// two `Notes` PDFs, not nothing).
 fn ambiguous_candidates(
     tree: &DocumentTree,
-    parent: &Parent,
-    segment: &str,
+    entries: Vec<&DocumentEntry>,
 ) -> Vec<AmbiguousCandidate> {
-    let literal: Vec<&DocumentEntry> = tree
-        .child_entries(parent)
-        .into_iter()
-        .filter(|e| e.visible_name == segment)
-        .collect();
-
-    let matched = if literal.len() >= 2 {
-        literal
-    } else if let Some((stem, ext)) = strip_known_extension(segment) {
-        tree.child_entries(parent)
-            .into_iter()
-            .filter(|e| {
-                e.visible_name == stem
-                    && matches!(
-                        &e.kind,
-                        ItemKind::Document { file_type, .. } if file_type.extension() == ext,
-                    )
-            })
-            .collect()
-    } else {
-        literal
-    };
-
-    matched
+    entries
         .into_iter()
         .map(|e| AmbiguousCandidate {
             uuid: e.uuid,
@@ -847,6 +814,42 @@ mod tests {
             Ok(Resolved::Entry(e)) => assert_eq!(e.uuid, Uuid::parse_str(DOC_2).unwrap()),
             other => panic!("expected Epub entry, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn extension_ambiguity_reports_all_matching_documents() {
+        let entries = [DOC_1, DOC_2, DOC_3]
+            .into_iter()
+            .map(|uuid| {
+                make_entry(
+                    uuid,
+                    "Notes",
+                    ItemType::Document,
+                    Parent::Root,
+                    Some(FileType::Pdf),
+                )
+            })
+            .chain([make_entry(
+                FOLDER_A,
+                "Notes",
+                ItemType::Collection,
+                Parent::Root,
+                None,
+            )])
+            .collect();
+        let tree = DocumentTree::build(entries);
+        let MetadataError::Ambiguous { candidates, .. } =
+            resolve_path(&tree, "/Notes.pdf").unwrap_err()
+        else {
+            panic!("expected ambiguous PDFs");
+        };
+        let mut ids: Vec<_> = candidates
+            .iter()
+            .map(|candidate| candidate.uuid.to_string())
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec![DOC_1, DOC_2, DOC_3]);
+        assert!(candidates.iter().all(|candidate| candidate.kind == "pdf"));
     }
 
     #[test]

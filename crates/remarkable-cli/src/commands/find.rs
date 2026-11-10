@@ -20,7 +20,7 @@ async fn run(ctx: &CommandContext, args: &FindArgs) -> anyhow::Result<()> {
     let result = run_with_tree(&tree, args);
     session.ssh.disconnect().await;
     let items = result?;
-    print_output(&items, ctx.format());
+    println!("{}", format_output(&items, ctx.format()));
     Ok(())
 }
 
@@ -111,10 +111,6 @@ fn build_matcher(pattern: &str, case_sensitive: bool) -> anyhow::Result<Matcher>
 // ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
-
-fn print_output(items: &[FindItem], format: OutputFormat) {
-    println!("{}", format_output(items, format));
-}
 
 /// # Panics
 /// Panics if `items` cannot be serialized as JSON.

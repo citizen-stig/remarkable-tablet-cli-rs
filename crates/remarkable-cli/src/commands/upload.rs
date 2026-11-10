@@ -85,7 +85,7 @@ async fn run(ctx: &CommandContext, args: &UploadArgs) -> anyhow::Result<()> {
     let result = run_with_conn(&session.ssh, ctx.data_dir(), &tree, args, ctx.no_restart()).await;
     session.ssh.disconnect().await;
     let out = result?;
-    print_output(&out, ctx.format());
+    println!("{}", format_output(&out, ctx.format()));
     Ok(())
 }
 
@@ -208,6 +208,7 @@ async fn upload_one<C: TabletConnection>(
         file_type: plan.file_type,
         page_count: None,
         pages: None,
+        c_pages: None,
     };
 
     let write_result: anyhow::Result<()> = async {
@@ -340,10 +341,6 @@ fn resolve_parent(
     }
 }
 
-fn print_output(out: &UploadOutput, format: OutputFormat) {
-    println!("{}", format_output(out, format));
-}
-
 #[must_use]
 pub fn format_output(out: &UploadOutput, format: OutputFormat) -> String {
     match format {
@@ -380,26 +377,10 @@ fn format_human(o: &UploadOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
-    use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind, Parent};
+    use crate::test_support::make_folder;
+    use remarkable_metadata::metadata::FileType;
     use remarkable_tablet::connection::FakeConnection;
     use std::io::Write;
-
-    fn make_folder(uuid: &str, name: &str, parent: Parent) -> DocumentEntry {
-        let deleted = parent == Parent::Trash;
-        DocumentEntry {
-            uuid: Uuid::parse_str(uuid).unwrap(),
-            visible_name: name.to_string(),
-            kind: ItemKind::Folder,
-            parent,
-            deleted,
-            pinned: false,
-            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
-            version: 1,
-            tags: vec![],
-            last_opened: None,
-        }
-    }
 
     fn temp_pdf() -> tempfile::NamedTempFile {
         let mut file = tempfile::Builder::new().suffix(".pdf").tempfile().unwrap();

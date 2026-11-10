@@ -1,6 +1,14 @@
+use std::collections::HashMap;
+use std::path::Path;
 use std::time::SystemTime;
 
+use futures::stream::{self, StreamExt};
+
 use crate::error::TabletError;
+
+/// Maximum concurrent per-file reads in the default
+/// [`TabletConnection::read_metadata_files`].
+const READ_CONCURRENCY: usize = 16;
 
 #[cfg(feature = "test-utils")]
 pub mod fake;
@@ -63,4 +71,32 @@ pub trait TabletConnection {
     async fn remove_dir_all(&self, path: &str) -> Result<(), TabletError>;
     async fn execute(&self, command: &str) -> Result<String, TabletError>;
     async fn file_exists(&self, path: &str) -> Result<bool, TabletError>;
+
+    /// Read every `*.metadata` and `*.content` file directly in `dir`, keyed
+    /// by basename. A failed read of one file is reported in its entry; the
+    /// outer error is reserved for failures that lose the whole listing.
+    async fn read_metadata_files(
+        &self,
+        dir: &str,
+    ) -> Result<HashMap<String, Result<Vec<u8>, TabletError>>, TabletError> {
+        let names: Vec<String> = self
+            .read_dir(dir)
+            .await?
+            .into_iter()
+            .map(|entry| entry.name)
+            .filter(|name| {
+                Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext == "metadata" || ext == "content")
+            })
+            .collect();
+        Ok(stream::iter(names)
+            .map(|name| async move {
+                let data = self.read_file(&format!("{dir}/{name}")).await;
+                (name, data)
+            })
+            .buffer_unordered(READ_CONCURRENCY)
+            .collect()
+            .await)
+    }
 }

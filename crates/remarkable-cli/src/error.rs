@@ -145,6 +145,8 @@ impl From<TabletError> for CliError {
             TabletError::Io { .. }
             | TabletError::Ssh { .. }
             | TabletError::CommandOutputNotUtf8 { .. }
+            | TabletError::CommandFailed { .. }
+            | TabletError::CommandTerminated { .. }
             | TabletError::CommandOutput { .. }
             | TabletError::ParseInt { .. }
             | TabletError::Json { .. }

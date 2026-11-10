@@ -4,11 +4,10 @@ use remarkable_cli::cli::UploadArgs;
 use remarkable_cli::commands::upload;
 use remarkable_cli::error::CliError;
 use remarkable_metadata::metadata::{FileType, ItemType, Parent, RawContent, RawMetadata};
-use remarkable_metadata::tree::DocumentTree;
 use remarkable_tablet::connection::{FakeConnection, TabletConnection};
-use remarkable_tablet::tablet::load_all_metadata;
 
-const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
+mod common;
+use common::{DATA_DIR, build_tree, downcast_cli, register_xochitl};
 
 const FOLDER_RESEARCH_UUID: &str = "aaaaaaaa-1111-1111-1111-111111111111";
 const FOLDER_TRASHED_UUID: &str = "aaaaaaaa-2222-2222-2222-222222222222";
@@ -52,16 +51,6 @@ fn populate(conn: &FakeConnection) {
     );
 }
 
-async fn build_tree(conn: &FakeConnection) -> DocumentTree {
-    let entries = load_all_metadata(conn, DATA_DIR).await.unwrap();
-    DocumentTree::build(entries)
-}
-
-fn register_xochitl(conn: &FakeConnection) {
-    conn.set_command_output("systemctl stop xochitl", "");
-    conn.set_command_output("systemctl start xochitl", "");
-}
-
 fn args(files: &[&Path], parent: Option<&str>, name: Option<&str>, dry_run: bool) -> UploadArgs {
     UploadArgs {
         files: files
@@ -79,10 +68,6 @@ fn make_local(dir: &Path, name: &str, content: &[u8]) -> PathBuf {
     let p = dir.join(name);
     std::fs::write(&p, content).unwrap();
     p
-}
-
-fn downcast_cli(err: anyhow::Error) -> CliError {
-    err.downcast::<CliError>().expect("expected CliError")
 }
 
 async fn remote_files(conn: &FakeConnection) -> Vec<String> {

@@ -17,8 +17,8 @@ pub mod tree;
 
 pub use error::{AmbiguousCandidate, MetadataError, ambiguous_message};
 pub use metadata::{
-    DocumentEntry, FileType, ItemKind, ItemType, Parent, RawContent, RawMetadata, extract_uuid,
-    parse_content, parse_metadata,
+    DocumentEntry, FileType, ItemKind, ItemType, LegacyPage, Parent, RawContent, RawMetadata,
+    extract_uuid, parse_content, parse_metadata,
 };
 pub use page_range::{PageSelection, PageSelectionError};
 pub use path_resolver::{Resolved, resolve, resolve_path, resolve_uuid_to_path};

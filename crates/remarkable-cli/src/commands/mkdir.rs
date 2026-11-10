@@ -61,7 +61,7 @@ async fn run(ctx: &CommandContext, args: &MkdirArgs) -> anyhow::Result<()> {
     let result = run_with_conn(&session.ssh, ctx.data_dir(), &tree, args, ctx.no_restart()).await;
     session.ssh.disconnect().await;
     let out = result?;
-    print_output(&out, ctx.format());
+    println!("{}", format_output(&out, ctx.format()));
     Ok(())
 }
 
@@ -143,7 +143,7 @@ fn plan_creations(
                 }
                 current = Parent::Folder(e.uuid);
             }
-            ChildLookup::Ambiguous => {
+            ChildLookup::Ambiguous(_) => {
                 return Err(CliError::InvalidPath(format!(
                     "ambiguous: multiple items named '{segment}' in the same folder \
                      — use a UUID instead"
@@ -160,7 +160,7 @@ fn plan_creations(
                 let uuid = Uuid::new_v4();
                 pending.push(PendingFolder {
                     uuid,
-                    name: (*segment).to_string(),
+                    name: segment.to_string(),
                     parent: current.clone(),
                     path: current_path.clone(),
                 });
@@ -206,10 +206,6 @@ async fn write_folders<C: TabletConnection>(
         });
     }
     Ok(out)
-}
-
-fn print_output(out: &MkdirOutput, format: OutputFormat) {
-    println!("{}", format_output(out, format));
 }
 
 #[must_use]

@@ -43,7 +43,7 @@ async fn run(ctx: &CommandContext, args: &RenameArgs) -> anyhow::Result<()> {
     let result = run_with_conn(&session.ssh, ctx.data_dir(), &tree, args, ctx.no_restart()).await;
     session.ssh.disconnect().await;
     let out = result?;
-    print_output(&out, ctx.format());
+    println!("{}", format_output(&out, ctx.format()));
     Ok(())
 }
 
@@ -85,7 +85,7 @@ pub async fn run_with_conn<C: TabletConnection>(
 
     let warnings = match tree.lookup_child(&entry.parent, &args.new_name) {
         ChildLookup::Missing => vec![],
-        ChildLookup::Entry(_) | ChildLookup::Ambiguous => {
+        ChildLookup::Entry(_) | ChildLookup::Ambiguous(_) => {
             if !args.allow_duplicate {
                 return Err(CliError::AlreadyExists(format!(
                     "parent already contains an entry named '{}'; pass --allow-duplicate to override",
@@ -178,10 +178,6 @@ fn display_path(
     parent_path(tree, entry).map_or_else(|| format!("/{name}"), |p| format!("{p}/{name}"))
 }
 
-fn print_output(out: &RenameOutput, format: OutputFormat) {
-    println!("{}", format_output(out, format));
-}
-
 #[must_use]
 pub fn format_output(out: &RenameOutput, format: OutputFormat) -> String {
     match format {
@@ -212,28 +208,9 @@ fn format_human(o: &RenameOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
-    use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind, Parent};
+    use crate::test_support::make_doc;
+    use remarkable_metadata::metadata::{FileType, Parent};
     use remarkable_tablet::connection::FakeConnection;
-
-    fn make_doc(uuid: &str, name: &str, parent: Parent, file_type: FileType) -> DocumentEntry {
-        let deleted = parent == Parent::Trash;
-        DocumentEntry {
-            uuid: Uuid::parse_str(uuid).unwrap(),
-            visible_name: name.to_string(),
-            kind: ItemKind::Document {
-                file_type,
-                page_count: None,
-            },
-            parent,
-            deleted,
-            pinned: false,
-            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
-            version: 1,
-            tags: vec![],
-            last_opened: None,
-        }
-    }
 
     #[tokio::test]
     async fn reject_renaming_root_item_to_trash() {

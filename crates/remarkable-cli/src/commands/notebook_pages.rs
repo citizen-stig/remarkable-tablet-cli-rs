@@ -28,6 +28,22 @@ pub async fn list_selected_pages<C: TabletConnection>(
     entry: &DocumentEntry,
     pages: Option<&PageSelection>,
 ) -> anyhow::Result<Vec<(u32, String)>> {
+    Ok(load_selected_pages(conn, data_dir, entry, pages)
+        .await?
+        .files)
+}
+
+pub(crate) struct SelectedPages {
+    pub files: Vec<(u32, String)>,
+    pub content: Option<RawContent>,
+}
+
+pub(crate) async fn load_selected_pages<C: TabletConnection>(
+    conn: &C,
+    data_dir: &str,
+    entry: &DocumentEntry,
+    pages: Option<&PageSelection>,
+) -> anyhow::Result<SelectedPages> {
     let pages_dir = format!("{data_dir}/{}", entry.uuid);
     let content_path = format!("{data_dir}/{}.content", entry.uuid);
 
@@ -69,23 +85,34 @@ pub async fn list_selected_pages<C: TabletConnection>(
         .map(|e| e.name)
         .collect();
 
-    let selected = match pages {
-        Some(selection) => select_page_files_strict(
-            content_bytes.as_deref().ok_or_else(|| {
-                anyhow!(
-                    "readable notebook page order required from {content_path} when using --pages"
-                )
-            })?,
-            &mut page_files,
-            selection,
-        )?,
-        None => enumerate_page_files(order_page_files_best_effort(
-            content_bytes.as_deref(),
-            &mut page_files,
-        )),
+    let content = match content_bytes.as_deref() {
+        Some(bytes) => match metadata::parse_content(bytes) {
+            Ok(content) => Some(content),
+            Err(err) if pages.is_some() => {
+                return Err(err).context("parse notebook .content");
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+    let selected = if let Some(selection) = pages {
+        let content = content.as_ref().ok_or_else(|| {
+            anyhow!("readable notebook page order required from {content_path} when using --pages")
+        })?;
+        let ids = require_page_ids(content)?;
+        select_page_files_from_ids(&ids, &mut page_files)
+            .into_iter()
+            .filter(|(page_number, _)| selection.contains(*page_number))
+            .collect()
+    } else {
+        let ids = content.as_ref().and_then(RawContent::ordered_page_ids);
+        enumerate_page_files(order_page_files_from_ids(ids.as_deref(), &mut page_files))
     };
 
-    Ok(selected)
+    Ok(SelectedPages {
+        files: selected,
+        content,
+    })
 }
 
 /// Best-effort page ordering for full notebook downloads or renders: try
@@ -95,32 +122,32 @@ pub fn order_page_files_best_effort(
     content_bytes: Option<&[u8]>,
     discovered: &mut Vec<String>,
 ) -> Vec<String> {
-    let pages = content_bytes
+    let ids = content_bytes
         .and_then(|bytes| metadata::parse_content(bytes).ok())
-        .and_then(|content| content.pages);
-    order_page_files_from_pages(pages.as_deref(), discovered)
+        .and_then(|content| content.ordered_page_ids());
+    order_page_files_from_ids(ids.as_deref(), discovered)
 }
 
 /// Strict page ordering for `--pages` callers: requires readable
-/// `.content` bytes that include a `pages` array.
+/// `.content` bytes that record a page order.
 pub fn order_page_files_strict(
     content_bytes: &[u8],
     discovered: &mut Vec<String>,
 ) -> anyhow::Result<Vec<String>> {
     let content = parse_strict_content(content_bytes)?;
-    let pages = require_pages_array(&content)?;
-    Ok(order_page_files_from_pages(Some(pages), discovered))
+    let ids = require_page_ids(&content)?;
+    Ok(order_page_files_from_ids(Some(&ids), discovered))
 }
 
-/// Build a page list from the known `pages` ordering. The returned vector
+/// Build a page list from a known page-id ordering. The returned vector
 /// contains every discovered `.rm` filename — any pages listed in
 /// `.content` but missing on disk are silently dropped, and any orphan
 /// `.rm` files not referenced by `.content` are appended at the end.
-pub fn order_page_files_from_pages(
-    pages: Option<&[serde_json::Value]>,
+pub fn order_page_files_from_ids(
+    ids: Option<&[String]>,
     discovered: &mut Vec<String>,
 ) -> Vec<String> {
-    let Some(arr) = pages else {
+    let Some(ids) = ids else {
         // Fallback path: no recorded order, hand back filename-sorted.
         discovered.sort();
         return std::mem::take(discovered);
@@ -128,11 +155,8 @@ pub fn order_page_files_from_pages(
 
     let mut ordered = Vec::with_capacity(discovered.len());
     let mut remaining: HashSet<String> = discovered.drain(..).collect();
-    for item in arr {
-        let Some(page_id) = extract_page_id(item) else {
-            continue;
-        };
-        let filename = format!("{page_id}.rm");
+    for id in ids {
+        let filename = format!("{id}.rm");
         if remaining.remove(&filename) {
             ordered.push(filename);
         }
@@ -143,36 +167,17 @@ pub fn order_page_files_from_pages(
     ordered
 }
 
-fn select_page_files_strict(
-    content_bytes: &[u8],
-    discovered: &mut Vec<String>,
-    selection: &PageSelection,
-) -> anyhow::Result<Vec<(u32, String)>> {
-    let content = parse_strict_content(content_bytes)?;
-    let pages = require_pages_array(&content)?;
-    Ok(select_page_files_from_pages(pages, discovered)
-        .into_iter()
-        .filter(|(page_number, _)| selection.contains(*page_number))
-        .collect())
-}
-
-fn select_page_files_from_pages(
-    pages: &[serde_json::Value],
-    discovered: &mut Vec<String>,
-) -> Vec<(u32, String)> {
+fn select_page_files_from_ids(ids: &[String], discovered: &mut Vec<String>) -> Vec<(u32, String)> {
     // `discovered` is drained into a `HashSet` below, so its order doesn't
     // need to be deterministic here — leftovers get sorted by filename
     // before being numbered after the recorded pages.
     let mut ordered = Vec::with_capacity(discovered.len());
     let mut remaining: HashSet<String> = discovered.drain(..).collect();
-    for (idx, item) in pages.iter().enumerate() {
+    for (idx, id) in ids.iter().enumerate() {
         let Some(page_number) = one_based_page_number(idx) else {
             continue;
         };
-        let Some(page_id) = extract_page_id(item) else {
-            continue;
-        };
-        let filename = format!("{page_id}.rm");
+        let filename = format!("{id}.rm");
         if remaining.remove(&filename) {
             ordered.push((page_number, filename));
         }
@@ -180,7 +185,7 @@ fn select_page_files_from_pages(
 
     let mut leftover: Vec<String> = remaining.into_iter().collect();
     leftover.sort();
-    let offset = pages.len();
+    let offset = ids.len();
     ordered.extend(leftover.into_iter().enumerate().filter_map(|(idx, name)| {
         let page_number = one_based_page_number(offset + idx)?;
         Some((page_number, name))
@@ -200,24 +205,14 @@ fn parse_strict_content(content_bytes: &[u8]) -> anyhow::Result<RawContent> {
     metadata::parse_content(content_bytes).context("parse notebook .content")
 }
 
-fn require_pages_array(content: &RawContent) -> anyhow::Result<&[serde_json::Value]> {
-    content.pages.as_deref().ok_or_else(|| {
-        anyhow!("notebook .content is missing a pages array; --pages requires recorded page order")
+fn require_page_ids(content: &RawContent) -> anyhow::Result<Vec<String>> {
+    content.ordered_page_ids().ok_or_else(|| {
+        anyhow!("notebook .content records no page order; --pages requires a recorded page order")
     })
 }
 
 fn one_based_page_number(index: usize) -> Option<u32> {
     u32::try_from(index + 1).ok()
-}
-
-pub fn extract_page_id(item: &serde_json::Value) -> Option<&str> {
-    if let Some(s) = item.as_str() {
-        return Some(s);
-    }
-    let obj = item.as_object()?;
-    obj.get("id")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| obj.get("uuid").and_then(serde_json::Value::as_str))
 }
 
 /// True when a missing page directory can be treated as an empty notebook

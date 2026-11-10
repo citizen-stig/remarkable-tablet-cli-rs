@@ -7,9 +7,19 @@ use tempfile::TempDir;
 use super::{RemoteEntry, RemoteFileKind, RemoteMetadata, TabletConnection};
 use crate::error::{IoSource, TabletError};
 
+#[derive(Clone)]
+enum FakeCommandResult {
+    Output(String),
+    Failed {
+        exit_status: u32,
+        stdout: String,
+        stderr: String,
+    },
+}
+
 pub struct FakeConnection {
     root: TempDir,
-    commands: std::sync::Mutex<Vec<(String, String)>>,
+    commands: std::sync::Mutex<Vec<(String, FakeCommandResult)>>,
     read_errors: std::sync::Mutex<HashMap<String, String>>,
     read_dir_errors: std::sync::Mutex<HashMap<String, String>>,
     write_error_suffixes: std::sync::Mutex<Vec<(String, String)>>,
@@ -75,11 +85,28 @@ impl FakeConnection {
     /// # Panics
     /// Panics if the internal mutex is poisoned.
     pub fn set_command_output(&self, cmd_substring: &str, output: &str) {
+        self.set_command_result(cmd_substring, FakeCommandResult::Output(output.to_string()));
+    }
+
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
+    pub fn set_command_error(&self, cmd_substring: &str, exit_status: u32, stderr: &str) {
+        self.set_command_result(
+            cmd_substring,
+            FakeCommandResult::Failed {
+                exit_status,
+                stdout: String::new(),
+                stderr: stderr.to_string(),
+            },
+        );
+    }
+
+    fn set_command_result(&self, cmd_substring: &str, result: FakeCommandResult) {
         let mut cmds = self.commands.lock().unwrap();
         if let Some(entry) = cmds.iter_mut().find(|(s, _)| s == cmd_substring) {
-            entry.1 = output.to_string();
+            entry.1 = result;
         } else {
-            cmds.push((cmd_substring.to_string(), output.to_string()));
+            cmds.push((cmd_substring.to_string(), result));
         }
     }
 
@@ -281,11 +308,27 @@ impl TabletConnection for FakeConnection {
             .lock()
             .unwrap()
             .push(command.to_string());
-        let cmds = self.commands.lock().unwrap();
-        for (substr, output) in cmds.iter() {
-            if command.contains(substr) {
-                return Ok(output.clone());
-            }
+        let result = self
+            .commands
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(substr, _)| command.contains(substr))
+            .map(|(_, result)| result.clone());
+        if let Some(result) = result {
+            return match result {
+                FakeCommandResult::Output(output) => Ok(output),
+                FakeCommandResult::Failed {
+                    exit_status,
+                    stdout,
+                    stderr,
+                } => Err(TabletError::CommandFailed {
+                    command: command.to_string(),
+                    exit_status,
+                    stdout,
+                    stderr,
+                }),
+            };
         }
         // The fake doesn't model an actual shell — an unregistered command is
         // a test-setup omission, surfaced as the dedicated `Mock` variant so

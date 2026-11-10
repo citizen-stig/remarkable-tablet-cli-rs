@@ -12,4 +12,6 @@ pub mod read;
 pub mod rename;
 pub mod render;
 pub mod rm;
+pub mod setup_wifi;
+mod templates;
 pub mod upload;

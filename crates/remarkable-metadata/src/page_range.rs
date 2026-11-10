@@ -5,27 +5,30 @@
 //! `>= 1`. Open-ended forms (`5-`, `-5`) are rejected because the parser
 //! has no way to know the document length.
 
-use std::collections::BTreeSet;
 use std::fmt;
+use std::ops::RangeInclusive;
 use std::str::FromStr;
 
 /// A non-empty, deduplicated, sorted set of 1-indexed page numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageSelection(BTreeSet<u32>);
+pub struct PageSelection(Vec<RangeInclusive<u32>>);
 
 impl PageSelection {
     #[must_use]
     pub fn contains(&self, page: u32) -> bool {
-        self.0.contains(&page)
+        self.0.iter().any(|range| range.contains(&page))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = u32> + '_ {
-        self.0.iter().copied()
+        self.0.iter().cloned().flatten()
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.0
+            .iter()
+            .map(|range| (range.end() - range.start() + 1) as usize)
+            .sum()
     }
 
     #[must_use]
@@ -59,7 +62,7 @@ impl FromStr for PageSelection {
             return Err(PageSelectionError::Empty);
         }
 
-        let mut pages = BTreeSet::new();
+        let mut ranges = Vec::new();
         for term in trimmed.split(',') {
             let term = term.trim();
             if term.is_empty() {
@@ -77,16 +80,25 @@ impl FromStr for PageSelection {
                 if end < start {
                     return Err(PageSelectionError::InvertedRange(term.to_string()));
                 }
-                pages.extend(start..=end);
+                ranges.push(start..=end);
             } else {
-                pages.insert(parse_page(term)?);
+                let page = parse_page(term)?;
+                ranges.push(page..=page);
             }
         }
 
-        if pages.is_empty() {
-            return Err(PageSelectionError::Empty);
+        ranges.sort_unstable_by_key(|range| *range.start());
+        let mut merged: Vec<RangeInclusive<u32>> = Vec::new();
+        for range in ranges {
+            if let Some(last) = merged.last_mut()
+                && *range.start() <= last.end().saturating_add(1)
+            {
+                *last = *last.start()..=(*last.end()).max(*range.end());
+            } else {
+                merged.push(range);
+            }
         }
-        Ok(Self(pages))
+        Ok(Self(merged))
     }
 }
 
@@ -103,11 +115,14 @@ fn parse_page(text: &str) -> Result<u32, PageSelectionError> {
 impl fmt::Display for PageSelection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut first = true;
-        for page in &self.0 {
+        for range in &self.0 {
             if !first {
                 f.write_str(",")?;
             }
-            write!(f, "{page}")?;
+            write!(f, "{}", range.start())?;
+            if range.start() != range.end() {
+                write!(f, "-{}", range.end())?;
+            }
             first = false;
         }
         Ok(())
@@ -209,6 +224,36 @@ mod tests {
     #[test]
     fn display_round_trip() {
         let sel = PageSelection::from_str("3,1,2").unwrap();
-        assert_eq!(sel.to_string(), "1,2,3");
+        assert_eq!(sel.to_string(), "1-3");
+        assert_eq!(sel.to_string().parse::<PageSelection>().unwrap(), sel);
+    }
+
+    #[test]
+    fn overlapping_and_adjacent_ranges_are_normalized() {
+        let sel: PageSelection = "9-10,3-5,1-3,5-6,8,10".parse().unwrap();
+        assert_eq!(
+            sel.iter().collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6, 8, 9, 10]
+        );
+        assert_eq!(sel.len(), 9);
+        assert_eq!(sel.to_string(), "1-6,8-10");
+        assert!(!sel.contains(7));
+        assert_eq!(sel, "1-6,8-10".parse().unwrap());
+    }
+
+    #[test]
+    fn full_u32_range_is_compact_and_lazy() {
+        let sel: PageSelection = "4294967295,1-4294967294,2-3".parse().unwrap();
+        assert_eq!(sel.len(), u32::MAX as usize);
+        assert_eq!(sel.iter().take(3).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert!(sel.contains(u32::MAX));
+        assert!(!sel.contains(0));
+        assert_eq!(sel.to_string(), "1-4294967295");
+        assert_eq!(sel, sel.to_string().parse().unwrap());
+        let last: PageSelection = "4294967294-4294967295,4294967295".parse().unwrap();
+        assert_eq!(
+            last.iter().collect::<Vec<_>>(),
+            vec![u32::MAX - 1, u32::MAX]
+        );
     }
 }

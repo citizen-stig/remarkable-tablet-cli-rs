@@ -1,23 +1,15 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
-
-use futures::stream::{self, StreamExt, TryStreamExt};
 
 use crate::connection::TabletConnection;
 use crate::error::TabletError;
 use remarkable_metadata::metadata::{self, DocumentEntry};
 
-/// Maximum concurrent SFTP read requests during metadata loading.
-///
-/// SFTP multiplexes by request ID, so many can be in-flight on a single
-/// session. 16 keeps the OpenSSH server's window saturated without
-/// overwhelming a USB-attached tablet.
-const READ_CONCURRENCY: usize = 16;
-
 /// Diagnostic summary of a [`load_all_metadata_full`] run.
 #[derive(Debug, Default)]
 pub struct LoadDiagnostics {
-    /// Total filenames returned by `list_dir(data_dir)`.
-    pub dir_entry_count: usize,
+    /// `.metadata` + `.content` files returned by `read_metadata_files`.
+    pub fetched_file_count: usize,
     /// Of those, how many matched the `<uuid>.metadata` shape.
     pub uuid_metadata_count: usize,
     /// `(filename, error)` for `.metadata` files that failed to parse.
@@ -26,10 +18,8 @@ pub struct LoadDiagnostics {
     /// parsed. Documents listed here are excluded from the loaded entries:
     /// without a usable `.content` we can't classify their file type.
     pub content_failures: Vec<(uuid::Uuid, String)>,
-    /// Wall time spent in the initial `list_dir` SFTP round-trip.
-    pub list_dir_elapsed: Duration,
-    /// Wall time spent reading + parsing `.metadata` and `.content` files.
-    pub read_elapsed: Duration,
+    /// Wall time spent fetching `.metadata` and `.content` files.
+    pub fetch_elapsed: Duration,
 }
 
 /// Load all document/folder metadata from the tablet's xochitl data directory.
@@ -59,28 +49,20 @@ pub async fn load_all_metadata_full<C: TabletConnection>(
 ) -> Result<(Vec<DocumentEntry>, LoadDiagnostics), TabletError> {
     let mut diag = LoadDiagnostics::default();
 
-    let list_start = Instant::now();
-    let dir_entries = conn.read_dir(data_dir).await?;
-    diag.list_dir_elapsed = list_start.elapsed();
-    diag.dir_entry_count = dir_entries.len();
+    let fetch_start = Instant::now();
+    let mut files = conn.read_metadata_files(data_dir).await?;
+    diag.fetch_elapsed = fetch_start.elapsed();
+    diag.fetched_file_count = files.len();
 
-    let uuids: Vec<_> = dir_entries
-        .iter()
-        .filter_map(|entry| metadata::extract_uuid(&entry.name))
+    let uuids: Vec<_> = files
+        .keys()
+        .filter_map(|name| metadata::extract_uuid(name))
         .collect();
     diag.uuid_metadata_count = uuids.len();
 
-    let read_start = Instant::now();
-    let outcomes: Vec<LoadOutcome> = stream::iter(uuids)
-        .map(|uuid| load_one(conn, data_dir, uuid))
-        .buffer_unordered(READ_CONCURRENCY)
-        .try_collect()
-        .await?;
-    diag.read_elapsed = read_start.elapsed();
-
-    let mut result = Vec::with_capacity(outcomes.len());
-    for outcome in outcomes {
-        match outcome {
+    let mut result = Vec::with_capacity(uuids.len());
+    for uuid in uuids {
+        match load_one(&mut files, uuid)? {
             LoadOutcome::Entry(entry) => result.push(entry),
             LoadOutcome::MetadataParseFail(file, err) => diag.parse_failures.push((file, err)),
             LoadOutcome::ContentReadFail(uuid, err) | LoadOutcome::ContentParseFail(uuid, err) => {
@@ -99,16 +81,15 @@ enum LoadOutcome {
     ContentParseFail(uuid::Uuid, String),
 }
 
-async fn load_one<C: TabletConnection>(
-    conn: &C,
-    data_dir: &str,
+/// Takes this uuid's files out of `files` (consuming them avoids copying the
+/// bytes).
+fn load_one(
+    files: &mut HashMap<String, Result<Vec<u8>, TabletError>>,
     uuid: uuid::Uuid,
 ) -> Result<LoadOutcome, TabletError> {
-    let meta_path = format!("{data_dir}/{uuid}.metadata");
-    let content_path = format!("{data_dir}/{uuid}.content");
-    let (meta_res, content_res) =
-        tokio::join!(conn.read_file(&meta_path), conn.read_file(&content_path));
-    let meta_bytes = meta_res?;
+    let meta_bytes = files
+        .remove(&format!("{uuid}.metadata"))
+        .expect("uuid was extracted from a .metadata key")?;
     let raw = match metadata::parse_metadata(&meta_bytes) {
         Ok(metadata) => metadata,
         Err(err) => {
@@ -120,9 +101,15 @@ async fn load_one<C: TabletConnection>(
     };
 
     let content = if raw.item_type == remarkable_metadata::metadata::ItemType::Document {
-        let bytes = match content_res {
-            Ok(bytes) => bytes,
-            Err(err) => return Ok(LoadOutcome::ContentReadFail(uuid, err.to_string())),
+        let bytes = match files.remove(&format!("{uuid}.content")) {
+            Some(Ok(bytes)) => bytes,
+            Some(Err(err)) => return Ok(LoadOutcome::ContentReadFail(uuid, err.to_string())),
+            None => {
+                return Ok(LoadOutcome::ContentReadFail(
+                    uuid,
+                    format!("{uuid}.content not found"),
+                ));
+            }
         };
         match metadata::parse_content(&bytes) {
             Ok(content) => Some(content),

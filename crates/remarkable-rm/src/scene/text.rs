@@ -22,7 +22,7 @@ impl InlineFormat {
             2 => Self::BoldEnd,
             3 => Self::ItalicStart,
             4 => Self::ItalicEnd,
-            _ => return Err(ParseError::InvalidBlock("invalid inline format code")),
+            other => return Err(ParseError::InvalidInlineFormat(other)),
         })
     }
 }
@@ -39,6 +39,7 @@ pub enum ParagraphStyle {
     Bullet2 = 5,
     CheckboxUnchecked = 6,
     CheckboxChecked = 7,
+    Numbered = 10,
 }
 
 impl ParagraphStyle {
@@ -52,6 +53,7 @@ impl ParagraphStyle {
             5 => Self::Bullet2,
             6 => Self::CheckboxUnchecked,
             7 => Self::CheckboxChecked,
+            10 => Self::Numbered,
             other => return Err(ParseError::InvalidParagraphStyle(other)),
         })
     }
@@ -145,15 +147,18 @@ fn read_text_item(body: &mut Reader<'_>) -> Result<TextItem, ParseError> {
         let str_len = bounded_count(&mut sub, "text string length")?;
         let _is_ascii = sub.read_bool()?;
         let bytes = sub.read_bytes(str_len)?;
-        if str_len > 0 {
+        if sub
+            .peek_tag()
+            .is_some_and(|tag| tag.index == 2 && tag.tag_type == crate::tag::TagType::Byte4)
+        {
+            Some(TextContent::Format(InlineFormat::from_u32(
+                sub.read_int(2)?,
+            )?))
+        } else {
             let text = std::str::from_utf8(bytes)
                 .map_err(|_| ParseError::InvalidUtf8)?
                 .to_owned();
             Some(TextContent::String(text))
-        } else {
-            // Empty string → format code follows.
-            let format_code = sub.read_int(2)?;
-            Some(TextContent::Format(InlineFormat::from_u32(format_code)?))
         }
     };
 

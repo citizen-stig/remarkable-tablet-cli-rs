@@ -4,7 +4,8 @@ use remarkable_cli::cli::BackupArgs;
 use remarkable_cli::commands::backup::{self, BackupManifest};
 use remarkable_tablet::connection::FakeConnection;
 
-const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
+mod common;
+use common::DATA_DIR;
 
 const FOLDER_UUID: &str = "aaaaaaaa-1111-1111-1111-111111111111";
 const DOC_PDF_UUID: &str = "bbbbbbbb-1111-1111-1111-111111111111";
@@ -190,6 +191,7 @@ async fn incremental_skips_local_files_with_newer_or_equal_mtime() {
     // Create a local copy of the PDF with a newer mtime.
     let local_pdf = xochitl_local.join(format!("{DOC_PDF_UUID}.pdf"));
     std::fs::write(&local_pdf, b"local stale bytes").unwrap();
+    #[expect(clippy::duration_suboptimal_units, reason = "Unix timestamp")]
     let newer = SystemTime::UNIX_EPOCH + Duration::from_secs(1_710_000_000);
     filetime::set_file_mtime(&local_pdf, filetime::FileTime::from_system_time(newer)).unwrap();
 

@@ -116,6 +116,8 @@ pub struct Point {
 pub struct Line {
     pub tool: Pen,
     pub color: PenColor,
+    /// Optional explicit RGBA colour (wire order is BGRA), firmware 3.x.
+    pub color_rgba: Option<[u8; 4]>,
     pub thickness_scale: f64,
     pub starting_length: f32,
     pub points: Vec<Point>,
@@ -144,10 +146,18 @@ pub fn read_line(body: &mut Reader<'_>, current_version: u8) -> Result<Line, Par
         Some(t) if t.index == 7 && t.tag_type == TagType::Id => Some(body.read_id(7)?),
         _ => None,
     };
+    let color_rgba = match body.peek_tag() {
+        Some(tag) if tag.index == 8 && tag.tag_type == TagType::Byte4 => {
+            let [blue, green, red, alpha] = body.read_int(8)?.to_le_bytes();
+            Some([red, green, blue, alpha])
+        }
+        _ => None,
+    };
 
     Ok(Line {
         tool,
         color,
+        color_rgba,
         thickness_scale,
         starting_length,
         points,
@@ -331,6 +341,16 @@ mod tests {
         let bytes = line_bytes(true, &points);
         let mut r = Reader::new(&bytes);
         let line = read_line(&mut r, 2).unwrap();
+        assert_eq!(line.move_id, Some(CrdtId { author: 1, seq: 2 }));
+    }
+
+    #[test]
+    fn explicit_colour_decodes_bgra_without_changing_palette_identity() {
+        let mut bytes = line_bytes(true, &[]);
+        bytes.extend_from_slice(&[0x84, 0x01, 0x10, 0x20, 0x30, 0x40]);
+        let line = read_line(&mut Reader::new(&bytes), 2).unwrap();
+        assert_eq!(line.color, PenColor::Black);
+        assert_eq!(line.color_rgba, Some([0x30, 0x20, 0x10, 0x40]));
         assert_eq!(line.move_id, Some(CrdtId { author: 1, seq: 2 }));
     }
 }

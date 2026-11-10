@@ -9,7 +9,7 @@ pub enum IoSource {
     #[error(transparent)]
     Sftp(#[from] russh_sftp::client::error::Error),
 
-    /// `std::io::Error` from the test [`crate::connection::FakeConnection`],
+    /// `std::io::Error` from the test `FakeConnection`,
     /// the CLI's read-only backup-tree shim, or `transfer.rs`'s local-fs
     /// operations. Also covers SFTP `AsyncWrite` errors (`write_all` /
     /// `shutdown`) which surface through tokio as `io::Error` even though
@@ -64,6 +64,26 @@ pub enum TabletError {
         source: std::string::FromUtf8Error,
     },
 
+    #[error(
+        "remote command `{command}` exited with status {exit_status}; stdout: {stdout:?}; stderr: {stderr:?}"
+    )]
+    CommandFailed {
+        command: String,
+        exit_status: u32,
+        stdout: String,
+        stderr: String,
+    },
+
+    #[error(
+        "remote command `{command}` terminated by signal {signal_name} (core dumped: {core_dumped}); message: {message:?}"
+    )]
+    CommandTerminated {
+        command: String,
+        signal_name: String,
+        core_dumped: bool,
+        message: String,
+    },
+
     /// Output of a remote shell command did not match the expected shape
     /// (e.g. `df -k` produced fewer fields than a row).
     #[error("unexpected output of `{command}`: {message}")]
@@ -97,7 +117,7 @@ pub enum TabletError {
     #[error("backup connection is read-only ({op})")]
     BackupReadOnly { op: &'static str },
 
-    /// Test-only: [`crate::connection::FakeConnection::execute`] received a
+    /// Test-only: `FakeConnection`'s [`execute`](crate::connection::TabletConnection::execute) received a
     /// command no test fixture had registered output for. Always present in
     /// the variant set so consumer code can match exhaustively, but only
     /// constructed under `#[cfg(feature = "test-utils")]`.
