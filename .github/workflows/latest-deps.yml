@@ -1,0 +1,30 @@
+# Builds against freshly resolved dependencies, as crates.io users get them (no Cargo.lock).
+# ci.yml uses --locked and can't see breakage from new upstream releases; the schedule catches it with no commit from us.
+name: Latest deps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: latest-deps-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (latest deps)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo update
+      - run: cargo test --workspace --all-features

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
 use russh::client::{self, Handle};
-use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKey, load_secret_key};
+use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_secret_key};
 use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::fs::Metadata;
@@ -31,7 +31,7 @@ impl client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKey,
+        _server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         Ok(true)
     }
@@ -194,9 +194,14 @@ async fn try_agent(handle: &mut Handle<ClientHandler>, user: &str) -> bool {
     let Ok(identities) = agent.request_identities().await else {
         return false;
     };
-    for pubkey in identities {
+    for identity in identities {
         if let Ok(r) = handle
-            .authenticate_publickey_with(user, pubkey, Some(HashAlg::Sha512), &mut agent)
+            .authenticate_publickey_with(
+                user,
+                identity.public_key().into_owned(),
+                Some(HashAlg::Sha512),
+                &mut agent,
+            )
             .await
             && r.success()
         {

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use russh::client::{self, Handle};
 use russh::keys::agent::client::AgentClient;
-use russh::keys::{HashAlg, PublicKey};
+use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession;
 use tokio::io::AsyncBufReadExt;
 
@@ -28,7 +28,10 @@ struct AcceptAll;
 impl client::Handler for AcceptAll {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, _key: &PublicKey) -> Result<bool, Self::Error> {
+    async fn check_server_key(
+        &mut self,
+        _key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
         Ok(true)
     }
 }
@@ -204,7 +207,12 @@ async fn agent_auth(handle: &mut Handle<AcceptAll>) -> anyhow::Result<bool> {
     let mut agent = AgentClient::connect_uds(&sock).await?;
     for key in agent.request_identities().await? {
         let result = handle
-            .authenticate_publickey_with("root", key, Some(HashAlg::Sha512), &mut agent)
+            .authenticate_publickey_with(
+                "root",
+                key.public_key().into_owned(),
+                Some(HashAlg::Sha512),
+                &mut agent,
+            )
             .await?;
         if result.success() {
             return Ok(true);

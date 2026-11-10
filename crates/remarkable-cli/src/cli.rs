@@ -387,7 +387,7 @@ pub struct RenderArgs {
     /// Path or UUID of the notebook to render
     pub path_or_uuid: String,
 
-    /// Output directory (default: ./<name>/). Refuses to overwrite an
+    /// Output directory (default: ./NAME/). Refuses to overwrite an
     /// existing destination.
     #[arg(long)]
     pub output: Option<PathBuf>,
