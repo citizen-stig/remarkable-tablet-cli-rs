@@ -161,8 +161,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ConnectOptions)
         if handle
             .authenticate_password(&opts.user, pw.clone())
             .await
-            .map(|r| r.success())
-            .unwrap_or(false)
+            .is_ok_and(|r| r.success())
         {
             verbose(opts, "auth: password accepted");
             return true;
