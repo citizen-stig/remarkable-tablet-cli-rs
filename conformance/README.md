@@ -1,10 +1,18 @@
 # Conformance fixtures
 
 This directory organizes independent evidence for parser, document-metadata,
-and rendering conformance. The first imported corpus is
-[rmscene's 13 parser fixtures](parser/rmscene/README.md), exercised by the
-`remarkable-rm` conformance integration test. Metadata and rendering corpora are
-still planned. Existing crate-local fixtures remain in place.
+and rendering conformance. Imported corpora include
+[rmscene's 13 parser fixtures](parser/rmscene/README.md),
+[four metadata bundles](metadata/remarquee/README.md),
+[two pencil-thumbnail pairs](rendering/tablet-thumbnails/eink-sync/README.md), and
+[one official-export pair](rendering/tablet-exports/remarkable-rm/sample-page/README.md).
+Existing crate-local fixtures remain in place.
+
+Parser, metadata, two visual ink-geometry checks, and visual comparison controls
+run in the normal Rust test suite. Three full-appearance comparisons currently
+expose known fidelity/format failures and are explicitly ignored by default.
+CI runs them separately as non-blocking diagnostics with image artifacts. See
+the pencil corpus README for commands, metrics and current failure scores.
 
 ## Layout
 
@@ -26,7 +34,8 @@ use the same input, reference its existing path rather than copying it.
 
 The following projects and their contributors supplied the research, fixture
 candidates, and testing approaches behind this layout. Inclusion in this table
-does not imply they endorse this project. Only rmscene has been imported so far.
+does not imply they endorse this project. Imported sources are rmscene,
+remarquee, eink-sync, and Scratchydisk/remarkable-rm; the rest remain candidates.
 
 | Project / attribution | Source material | Intended category |
 | --- | --- | --- |

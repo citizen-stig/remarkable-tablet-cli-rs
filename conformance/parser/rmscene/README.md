@@ -56,7 +56,8 @@ Acceptance means `parse_page` succeeds, not that every block is represented in
 the public `Page`. In particular, glyph highlights are currently skipped, and the
 concurrent-insert fixture does not yet assert reconstructed text ordering. These
 tests do not establish rendering fidelity, complete text semantics, or document
-metadata support. The other categories remain planned work.
+metadata support. Other categories have their own tests and status in the
+[conformance catalog](../../README.md).
 
 No Python package or network access is needed to run the Rust tests. Upstream
 assertion logic informed these tests; its copyright notice is preserved in LICENSE.
