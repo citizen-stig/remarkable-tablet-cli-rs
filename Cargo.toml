@@ -8,7 +8,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT OR Apache-2.0"
@@ -38,9 +38,9 @@ toml_edit = "0.22"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # In-tree crates referenced by sibling crates.
-remarkable-metadata = { path = "crates/remarkable-metadata", version = "0.1.0" }
-remarkable-tablet = { path = "crates/remarkable-tablet", version = "0.1.0" }
-remarkable-rm = { path = "crates/remarkable-rm", version = "0.1.0" }
+remarkable-metadata = { path = "crates/remarkable-metadata", version = "0.1.1" }
+remarkable-tablet = { path = "crates/remarkable-tablet", version = "0.1.1" }
+remarkable-rm = { path = "crates/remarkable-rm", version = "0.1.1" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
