@@ -423,9 +423,8 @@ async fn load_diagnostics_records_timing() {
     let conn = setup_fake_tablet();
     let (_entries, diag) = load_all_metadata_full(&conn, DATA_DIR).await.unwrap();
     // FakeConnection serves files from a tempdir, so timing is non-zero but small.
-    assert!(diag.list_dir_elapsed.as_nanos() > 0);
-    assert!(diag.read_elapsed.as_nanos() > 0);
-    assert!(diag.dir_entry_count > 0);
+    assert!(diag.fetch_elapsed.as_nanos() > 0);
+    assert!(diag.fetched_file_count > 0);
     assert!(diag.uuid_metadata_count > 0);
 }
 

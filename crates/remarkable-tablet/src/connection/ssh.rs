@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
@@ -235,6 +236,115 @@ fn into_remote_metadata(meta: &Metadata) -> RemoteMetadata {
     }
 }
 
+impl SshConnection {
+    /// Run `command` and return raw stdout, for binary output such as a tar stream.
+    async fn exec_bytes(&self, command: &str) -> Result<Vec<u8>, TabletError> {
+        let handle = self.handle.lock().await;
+        let mut channel =
+            handle
+                .channel_open_session()
+                .await
+                .map_err(|source| TabletError::Ssh {
+                    op: format!("open channel for `{command}`"),
+                    source,
+                })?;
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|source| TabletError::Ssh {
+                op: format!("exec `{command}`"),
+                source,
+            })?;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit_status = None;
+        let mut exit_signal = None;
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                ChannelMsg::Data { ref data } => stdout.extend_from_slice(data),
+                ChannelMsg::ExtendedData { ref data, .. } => stderr.extend_from_slice(data),
+                ChannelMsg::ExitStatus {
+                    exit_status: status,
+                } => exit_status = Some(status),
+                ChannelMsg::ExitSignal {
+                    signal_name,
+                    core_dumped,
+                    error_message,
+                    ..
+                } => {
+                    exit_signal = Some((format!("{signal_name:?}"), core_dumped, error_message));
+                }
+                ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        if let Some((signal_name, core_dumped, message)) = exit_signal {
+            return Err(TabletError::CommandTerminated {
+                command: command.to_string(),
+                signal_name,
+                core_dumped,
+                message,
+            });
+        }
+        if let Some(exit_status) = exit_status
+            && exit_status != 0
+        {
+            return Err(TabletError::CommandFailed {
+                command: command.to_string(),
+                exit_status,
+                stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            });
+        }
+        Ok(stdout)
+    }
+}
+
+/// Minimal reader for the ustar archives `BusyBox` `tar -c` writes: regular
+/// files only, names up to 100 bytes, no compression. Returns
+/// `(basename without "./", contents)` pairs.
+fn parse_ustar(archive: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    const BLOCK: usize = 512;
+    let mut files = Vec::new();
+    let mut offset = 0;
+    while offset + BLOCK <= archive.len() {
+        let header = &archive[offset..offset + BLOCK];
+        if header.iter().all(|&b| b == 0) {
+            return Ok(files);
+        }
+        let field = |range: std::ops::Range<usize>| {
+            let raw = &header[range];
+            let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+            String::from_utf8_lossy(&raw[..end]).into_owned()
+        };
+        let name = field(0..100);
+        let size_field = field(124..136);
+        let size = usize::from_str_radix(size_field.trim(), 8).map_err(|err| {
+            format!("tar header at offset {offset} for {name:?}: bad size {size_field:?}: {err}")
+        })?;
+        let data_start = offset + BLOCK;
+        let data = archive.get(data_start..data_start + size).ok_or_else(|| {
+            format!(
+                "tar entry {name:?} at offset {offset} claims {size} bytes, archive has {}",
+                archive.len().saturating_sub(data_start)
+            )
+        })?;
+        if matches!(header[156], b'0' | 0) {
+            let name = name.strip_prefix("./").unwrap_or(&name).to_string();
+            files.push((name, data.to_vec()));
+        }
+        offset = data_start + size.div_ceil(BLOCK) * BLOCK;
+    }
+    if offset == archive.len() {
+        return Ok(files);
+    }
+    Err(format!(
+        "tar stream truncated: {} trailing bytes at offset {offset} of {}",
+        archive.len() - offset,
+        archive.len()
+    ))
+}
+
 impl TabletConnection for SshConnection {
     async fn read_file(&self, path: &str) -> Result<Vec<u8>, TabletError> {
         let mut file = self
@@ -246,7 +356,9 @@ impl TabletConnection for SshConnection {
                 path: path.to_string(),
                 source: IoSource::Sftp(source),
             })?;
-        let mut data = Vec::new();
+        // russh-sftp sends one READ per poll sized to spare capacity; starting
+        // empty makes tokio grow it 32, 64, 128... = one round-trip per step.
+        let mut data = Vec::with_capacity(256 * 1024);
         file.read_to_end(&mut data)
             .await
             .map_err(|source| TabletError::Io {
@@ -348,64 +460,43 @@ impl TabletConnection for SshConnection {
     }
 
     async fn execute(&self, command: &str) -> Result<String, TabletError> {
-        let handle = self.handle.lock().await;
-        let mut channel =
-            handle
-                .channel_open_session()
-                .await
-                .map_err(|source| TabletError::Ssh {
-                    op: format!("open channel for `{command}`"),
-                    source,
-                })?;
-        channel
-            .exec(true, command)
-            .await
-            .map_err(|source| TabletError::Ssh {
-                op: format!("exec `{command}`"),
-                source,
-            })?;
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let mut exit_status = None;
-        let mut exit_signal = None;
-        while let Some(msg) = channel.wait().await {
-            match msg {
-                ChannelMsg::Data { ref data } => stdout.extend_from_slice(data),
-                ChannelMsg::ExtendedData { ref data, .. } => stderr.extend_from_slice(data),
-                ChannelMsg::ExitStatus {
-                    exit_status: status,
-                } => exit_status = Some(status),
-                ChannelMsg::ExitSignal {
-                    signal_name,
-                    core_dumped,
-                    error_message,
-                    ..
-                } => {
-                    exit_signal = Some((format!("{signal_name:?}"), core_dumped, error_message));
-                }
-                ChannelMsg::Close => break,
-                _ => {}
-            }
-        }
-        if let Some((signal_name, core_dumped, message)) = exit_signal {
-            return Err(TabletError::CommandTerminated {
-                command: command.to_string(),
-                signal_name,
-                core_dumped,
-                message,
-            });
-        }
-        if let Some(exit_status) = exit_status
-            && exit_status != 0
-        {
-            return Err(TabletError::CommandFailed {
-                command: command.to_string(),
+        String::from_utf8(self.exec_bytes(command).await?)
+            .map_err(|source| TabletError::CommandOutputNotUtf8 { source })
+    }
+
+    async fn read_metadata_files(
+        &self,
+        dir: &str,
+    ) -> Result<HashMap<String, Result<Vec<u8>, TabletError>>, TabletError> {
+        // One tar stream instead of an SFTP open/read/close per file: ~900
+        // files took ~0.9 s over SFTP vs ~0.3 s as tar on USB. The guard
+        // exists because BusyBox tar fails with "empty archive" on no input.
+        let dir = crate::tablet::shell_single_quote(dir);
+        let command = format!(
+            "cd {dir} || exit 1; [ -z \"$(find . -maxdepth 1 -name '*.metadata')\" ] || \
+             find . -maxdepth 1 \\( -name '*.metadata' -o -name '*.content' \\) | tar -cf - -T -"
+        );
+        let archive = self.exec_bytes(&command).await.map_err(|err| match err {
+            // stdout is a partial tar stream: megabytes of noise in an error message.
+            TabletError::CommandFailed {
+                command,
                 exit_status,
-                stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&stderr).into_owned(),
-            });
-        }
-        String::from_utf8(stdout).map_err(|source| TabletError::CommandOutputNotUtf8 { source })
+                stdout,
+                stderr,
+            } => TabletError::CommandFailed {
+                command,
+                exit_status,
+                stdout: format!("<{} bytes of tar output omitted>", stdout.len()),
+                stderr,
+            },
+            other => other,
+        })?;
+        let files = parse_ustar(&archive)
+            .map_err(|message| TabletError::CommandOutput { command, message })?;
+        Ok(files
+            .into_iter()
+            .map(|(name, data)| (name, Ok(data)))
+            .collect())
     }
 
     async fn file_exists(&self, path: &str) -> Result<bool, TabletError> {
@@ -417,5 +508,52 @@ impl TabletConnection for SshConnection {
                 path: path.to_string(),
                 source: IoSource::Sftp(source),
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ustar;
+
+    fn ustar_entry(name: &str, data: &[u8]) -> Vec<u8> {
+        let mut header = vec![0u8; 512];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        let size = format!("{:011o}\0", data.len());
+        header[124..136].copy_from_slice(size.as_bytes());
+        header[156] = b'0';
+        let mut out = header;
+        out.extend_from_slice(data);
+        out.resize(out.len().div_ceil(512) * 512, 0);
+        out
+    }
+
+    #[test]
+    fn parses_two_files_and_strips_dot_slash() {
+        let big = vec![b'x'; 700];
+        let mut archive = ustar_entry("./a.metadata", b"{}");
+        archive.extend(ustar_entry("b.content", &big));
+        archive.extend(vec![0u8; 1024]);
+
+        let files = parse_ustar(&archive).unwrap();
+        assert_eq!(
+            files,
+            vec![
+                ("a.metadata".to_string(), b"{}".to_vec()),
+                ("b.content".to_string(), big),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_input_is_empty_listing() {
+        assert_eq!(parse_ustar(&[]).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn truncated_entry_reports_claimed_and_actual_size() {
+        let mut archive = ustar_entry("a.content", &[b'x'; 600]);
+        archive.truncate(512 + 100);
+        let err = parse_ustar(&archive).unwrap_err();
+        assert!(err.contains("claims 600 bytes, archive has 100"), "{err}");
     }
 }

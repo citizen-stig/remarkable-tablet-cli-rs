@@ -2207,6 +2207,7 @@ dependencies = [
 name = "remarkable-tablet"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "filetime",
  "futures",
  "remarkable-metadata",

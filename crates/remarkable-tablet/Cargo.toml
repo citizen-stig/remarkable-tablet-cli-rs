@@ -30,6 +30,7 @@ filetime = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
+anyhow.workspace = true
 remarkable-tablet = { path = ".", features = ["test-utils"] }
 
 [lints]

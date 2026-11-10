@@ -214,12 +214,11 @@ impl CommandContext {
             .context("load metadata")?;
         self.log_verbose(
             &format!(
-                "xochitl: {} dir entries ({}ms list_dir), {} matched <uuid>.metadata, {} parsed in {}ms, {} parse failures, {} content failures",
-                diag.dir_entry_count,
-                diag.list_dir_elapsed.as_millis(),
+                "xochitl: fetched {} files in {}ms, {} matched <uuid>.metadata, {} parsed, {} parse failures, {} content failures",
+                diag.fetched_file_count,
+                diag.fetch_elapsed.as_millis(),
                 diag.uuid_metadata_count,
                 entries.len(),
-                diag.read_elapsed.as_millis(),
                 diag.parse_failures.len(),
                 diag.content_failures.len(),
             ),
