@@ -9,6 +9,11 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  NO_COLOR: 1
+  # Explicit `always` (set by dtolnay/rust-toolchain when unset) would override NO_COLOR in cargo.
+  CARGO_TERM_COLOR: never
+
 jobs:
   release:
     name: release-plz release
