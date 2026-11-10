@@ -12,6 +12,9 @@ human-readable output by default, `--format json` for scripts and agents.
 This is **not** an MCP server — it's a unix-style CLI. For the full command
 reference, see [`SPEC.md`](SPEC.md).
 
+The [conformance fixture catalog](conformance/README.md) organizes parser,
+document-metadata, and rendering reference cases, with upstream attribution.
+
 ## Why this exists
 
 I wanted a scriptable way to inspect and back up files directly from my reMarkable tablet over SSH.

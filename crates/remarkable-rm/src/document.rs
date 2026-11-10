@@ -7,10 +7,11 @@ use crate::blocks::{BlockType, iter_blocks};
 use crate::crdt::CrdtId;
 use crate::error::ParseError;
 use crate::primitives::Reader;
+use crate::scene::glyph::{GlyphRange, read_glyph};
 use crate::scene::items::{ItemType, read_scene_item};
 use crate::scene::line::Line;
 use crate::scene::text::{RootText, read_root_text_block};
-use crate::scene::tree::{SceneTreeBlock, read_scene_tree_block, read_tree_node_block};
+use crate::scene::tree::{Anchor, SceneTreeBlock, read_scene_tree_block, read_tree_node_block};
 
 #[derive(Debug, Clone, Default)]
 pub struct Page {
@@ -26,6 +27,7 @@ pub struct Layer {
     pub name: String,
     pub visible: bool,
     pub lines: Vec<Line>,
+    pub glyphs: Vec<GlyphRange>,
 }
 
 /// Parse one full `.rm` v6 file into a [`Page`]. Top-level entry point for
@@ -47,6 +49,7 @@ pub fn parse_page(bytes: &[u8]) -> Result<Page, ParseError> {
                     node_id: n.node_id,
                     label: n.label.value,
                     visible: n.visible.value,
+                    anchor: n.anchor,
                 });
             }
             Some(BlockType::SceneGroupItem) => {
@@ -79,13 +82,27 @@ pub fn parse_page(bytes: &[u8]) -> Result<Page, ParseError> {
                     });
                 }
             }
+            Some(BlockType::SceneGlyphItem) => {
+                let envelope = read_scene_item(&mut body, ItemType::GlyphRange, read_glyph)?;
+                if envelope.deleted_length == 0
+                    && let Some(glyph) = envelope.value
+                {
+                    intermediate.scene_items.push(SceneItemRecord {
+                        parent_id: envelope.parent_id,
+                        item_id: envelope.item_id,
+                        left_id: envelope.left_id,
+                        right_id: envelope.right_id,
+                        kind: SceneItemKind::Glyph(glyph),
+                    });
+                }
+            }
             Some(BlockType::RootText) => {
                 intermediate.text = Some(read_root_text_block(&mut body)?);
             }
             Some(BlockType::SceneInfo) => {
                 intermediate.paper_size = read_paper_size(&mut body)?;
             }
-            // MigrationInfo, AuthorIds, PageInfo, SceneGlyphItem,
+            // MigrationInfo, AuthorIds, PageInfo,
             // SceneTextItem, SceneTombstoneItem, and unknown types are
             // consumed but not surfaced (renderer doesn't need them yet).
             // TODO: Be explicit about non-used types.
@@ -93,7 +110,7 @@ pub fn parse_page(bytes: &[u8]) -> Result<Page, ParseError> {
         }
     }
 
-    Ok(intermediate.assemble())
+    intermediate.assemble()
 }
 
 #[derive(Debug, Default)]
@@ -110,6 +127,7 @@ struct NodeProps {
     node_id: CrdtId,
     label: String,
     visible: bool,
+    anchor: Option<Anchor>,
 }
 
 #[derive(Debug)]
@@ -125,10 +143,11 @@ struct SceneItemRecord {
 enum SceneItemKind {
     Group { node_id: CrdtId },
     Line(Line),
+    Glyph(GlyphRange),
 }
 
 impl Intermediate {
-    fn assemble(self) -> Page {
+    fn assemble(self) -> Result<Page, ParseError> {
         let Self {
             trees: _trees,
             nodes,
@@ -137,6 +156,29 @@ impl Intermediate {
             paper_size,
         } = self;
 
+        let layout = text
+            .as_ref()
+            .map(RootText::layout)
+            .transpose()?
+            .unwrap_or_default();
+        let offsets: HashMap<_, _> = nodes
+            .iter()
+            .filter_map(|n| {
+                n.anchor.as_ref().map(|a| {
+                    (
+                        n.node_id,
+                        (
+                            a.anchor_origin_x.value,
+                            layout
+                                .anchors
+                                .get(&a.anchor_id.value)
+                                .copied()
+                                .unwrap_or(0.0),
+                        ),
+                    )
+                })
+            })
+            .collect();
         let mut node_props: HashMap<CrdtId, (String, bool)> = nodes
             .into_iter()
             .map(|n| (n.node_id, (n.label, n.visible)))
@@ -164,20 +206,29 @@ impl Intermediate {
                 .remove(&node_id)
                 .unwrap_or_else(|| (String::new(), true));
             let mut layer_lines = Vec::new();
-            collect_lines(node_id, &mut items_by_parent, &mut layer_lines);
+            let mut layer_glyphs = Vec::new();
+            collect_lines(
+                node_id,
+                &mut items_by_parent,
+                &mut layer_lines,
+                &mut layer_glyphs,
+                &offsets,
+                (0.0, 0.0),
+            );
             layers.push(Layer {
                 node_id,
                 name,
                 visible,
                 lines: layer_lines,
+                glyphs: layer_glyphs,
             });
         }
 
-        Page {
+        Ok(Page {
             layers,
             text,
             paper_size,
-        }
+        })
     }
 }
 
@@ -185,15 +236,35 @@ fn collect_lines(
     parent_id: CrdtId,
     items_by_parent: &mut HashMap<CrdtId, Vec<SceneItemRecord>>,
     lines: &mut Vec<Line>,
+    glyphs: &mut Vec<GlyphRange>,
+    offsets: &HashMap<CrdtId, (f32, f32)>,
+    parent_offset: (f32, f32),
 ) {
     let Some(items) = items_by_parent.remove(&parent_id) else {
         return;
     };
 
+    let offset = offsets.get(&parent_id).copied().unwrap_or_default();
+    let offset = (offset.0 + parent_offset.0, offset.1 + parent_offset.1);
     for item in order_scene_items(items) {
         match item.kind {
-            SceneItemKind::Group { node_id } => collect_lines(node_id, items_by_parent, lines),
-            SceneItemKind::Line(line) => lines.push(line),
+            SceneItemKind::Group { node_id } => {
+                collect_lines(node_id, items_by_parent, lines, glyphs, offsets, offset);
+            }
+            SceneItemKind::Glyph(mut glyph) => {
+                for rect in &mut glyph.rectangles {
+                    rect.x += f64::from(offset.0);
+                    rect.y += f64::from(offset.1);
+                }
+                glyphs.push(glyph);
+            }
+            SceneItemKind::Line(mut line) => {
+                for point in &mut line.points {
+                    point.x += offset.0;
+                    point.y += offset.1;
+                }
+                lines.push(line);
+            }
         }
     }
 }

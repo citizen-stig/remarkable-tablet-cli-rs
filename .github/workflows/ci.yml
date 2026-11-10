@@ -49,6 +49,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-features --locked
       - run: cargo test --workspace --all-features --locked
+      # The upstream official PNG and .rm contain different page revisions.
+      # Keep evidence visible until a matching pair replaces this diagnostic.
+      - name: Inspect unpaired official reference
+        continue-on-error: true
+        run: cargo test -p remarkable-rm --test visual_conformance --locked official_export_matches_sample_page -- --ignored --nocapture
+      - name: Upload visual differences
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-conformance-${{ matrix.os }}
+          path: target/conformance/rendering/
+          if-no-files-found: ignore
 
   coverage:
     name: coverage
