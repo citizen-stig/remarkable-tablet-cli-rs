@@ -7,9 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-readme.workspace = true
-keywords.workspace = true
-categories.workspace = true
+readme = "README.md"
+keywords = ["remarkable", "tablet", "ssh", "sftp", "e-ink"]
+categories = ["network-programming", "filesystem", "hardware-support"]
 description = "SSH/SFTP client and high-level filesystem operations for the reMarkable tablet."
 
 [features]

@@ -7,9 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-readme.workspace = true
-keywords.workspace = true
-categories.workspace = true
+readme = "README.md"
+keywords = ["remarkable", "metadata", "parser", "e-ink", "notebook"]
+categories = ["parser-implementations"]
 description = "Parse reMarkable tablet .metadata/.content JSON and build a logical document tree."
 
 [features]
