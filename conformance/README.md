@@ -1,9 +1,10 @@
 # Conformance fixtures
 
 This directory organizes independent evidence for parser, document-metadata,
-and rendering conformance. It currently contains the directory structure and
-source catalog only: upstream fixtures have not been imported and no test runner
-consumes this directory yet. Existing crate-local fixtures remain in place.
+and rendering conformance. The first imported corpus is
+[rmscene's 13 parser fixtures](parser/rmscene/README.md), exercised by the
+`remarkable-rm` conformance integration test. Metadata and rendering corpora are
+still planned. Existing crate-local fixtures remain in place.
 
 ## Layout
 
@@ -25,7 +26,7 @@ use the same input, reference its existing path rather than copying it.
 
 The following projects and their contributors supplied the research, fixture
 candidates, and testing approaches behind this layout. Inclusion in this table
-does not imply their files have been copied or that they endorse this project.
+does not imply they endorse this project. Only rmscene has been imported so far.
 
 | Project / attribution | Source material | Intended category |
 | --- | --- | --- |
