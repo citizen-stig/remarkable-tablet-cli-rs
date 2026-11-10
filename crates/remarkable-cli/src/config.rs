@@ -29,6 +29,7 @@ pub struct FileConfig {
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
     pub host: Option<String>,
+    pub host_is_explicit: bool,
     pub port: u16,
     pub user: String,
     pub password: Option<String>,
@@ -50,21 +51,89 @@ pub fn default_config_path() -> Option<PathBuf> {
     })
 }
 
+fn workspace_config_path() -> Option<PathBuf> {
+    std::env::current_dir()
+        .ok()
+        .as_deref()
+        .and_then(workspace_config_path_from)
+}
+
+fn workspace_config_path_from(cwd: &Path) -> Option<PathBuf> {
+    let path = cwd
+        .join(".config")
+        .join("remarkable-cli")
+        .join("config.toml");
+    path.exists().then_some(path)
+}
+
+fn selected_config_path(path: Option<&Path>) -> Option<PathBuf> {
+    match path {
+        Some(path) => Some(path.to_path_buf()),
+        None => workspace_config_path().or_else(default_config_path),
+    }
+}
+
+/// Local cache directory for paper templates fetched from the tablet:
+/// `$XDG_CACHE_HOME/remarkable-cli/templates`, or
+/// `$HOME/.cache/remarkable-cli/templates` when `XDG_CACHE_HOME` is unset or
+/// not absolute. `None` only when neither variable is available.
+#[must_use]
+pub fn default_template_cache_dir() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+        let xdg = PathBuf::from(xdg);
+        if xdg.is_absolute() {
+            return Some(xdg.join("remarkable-cli").join("templates"));
+        }
+    }
+    std::env::var_os("HOME").map(|h| {
+        PathBuf::from(h)
+            .join(".cache")
+            .join("remarkable-cli")
+            .join("templates")
+    })
+}
+
 /// # Errors
 /// Returns an error if the config file exists but cannot be read or parsed as TOML.
 pub fn load_file_config(path: Option<&Path>) -> anyhow::Result<FileConfig> {
-    let target = match path {
-        Some(p) => Some(p.to_path_buf()),
-        None => default_config_path(),
-    };
-    let Some(p) = target else {
+    let Some(p) = selected_config_path(path) else {
         return Ok(FileConfig::default());
     };
     if !p.exists() {
+        if path.is_some() {
+            anyhow::bail!("config file does not exist: {}", p.display());
+        }
         return Ok(FileConfig::default());
     }
     let raw = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
     toml::from_str(&raw).with_context(|| format!("parse {}", p.display()))
+}
+
+/// Set `host` in the selected config without changing its other keys or comments.
+///
+/// # Errors
+/// Returns an error if no config path is available or the file cannot be read, parsed, or written.
+pub(crate) fn set_config_host(path: Option<&Path>, host: &str) -> anyhow::Result<PathBuf> {
+    let config_path = selected_config_path(path)
+        .ok_or_else(|| anyhow::anyhow!("cannot select config path: HOME is not set"))?;
+    let raw = if config_path.exists() {
+        std::fs::read_to_string(&config_path)
+            .with_context(|| format!("read {}", config_path.display()))?
+    } else {
+        String::new()
+    };
+    let mut document = raw
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("parse {}", config_path.display()))?;
+    document["host"] = toml_edit::value(host);
+
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create config directory {}", parent.display()))?;
+    }
+    std::fs::write(&config_path, document.to_string())
+        .with_context(|| format!("write {}", config_path.display()))?;
+    Ok(config_path)
 }
 
 #[must_use]
@@ -118,6 +187,7 @@ pub fn resolve(
 
     ResolvedConfig {
         host,
+        host_is_explicit: sources.host.is_explicit(),
         port,
         user,
         password,
@@ -150,6 +220,7 @@ mod tests {
 
     fn base_cli() -> GlobalOptions {
         GlobalOptions {
+            config: None,
             host: None,
             port: DEFAULT_PORT,
             user: DEFAULT_USER.to_string(),
@@ -306,11 +377,13 @@ mod tests {
     }
 
     #[test]
-    fn load_missing_file_returns_default() {
-        let cfg = load_file_config(Some(Path::new("/definitely/does/not/exist.toml")))
-            .expect("missing file should be OK");
-        assert!(cfg.host.is_none());
-        assert!(cfg.port.is_none());
+    fn explicit_missing_file_is_an_error() {
+        let path = Path::new("/definitely/does/not/exist.toml");
+        let err = load_file_config(Some(path)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "config file does not exist: /definitely/does/not/exist.toml"
+        );
     }
 
     #[test]
@@ -321,5 +394,37 @@ mod tests {
         let cfg = load_file_config(Some(&p)).unwrap();
         assert_eq!(cfg.host.as_deref(), Some("192.168.1.10"));
         assert_eq!(cfg.port, Some(2222));
+    }
+
+    #[test]
+    fn finds_workspace_config_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join(".config")
+            .join("remarkable-cli")
+            .join("config.toml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "password = \"from-workspace\"\n").unwrap();
+
+        let selected = workspace_config_path_from(dir.path());
+        assert_eq!(selected.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn set_host_preserves_other_config_and_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# keep this\nhost = \"192.168.1.42\"\npassword = \"secret\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(set_config_host(Some(&path), "notes.local").unwrap(), path);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# keep this\nhost = \"notes.local\"\npassword = \"secret\"\n"
+        );
     }
 }

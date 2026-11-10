@@ -56,7 +56,7 @@ async fn run(ctx: &CommandContext, args: &LsArgs) -> anyhow::Result<()> {
     let result = run_with_tree(&tree, args);
     session.ssh.disconnect().await;
     let output = result?;
-    print_output(&output, ctx.format());
+    println!("{}", format_output(&output, ctx.format()));
     Ok(())
 }
 
@@ -106,21 +106,21 @@ fn resolve_target(tree: &DocumentTree, args: &LsArgs) -> anyhow::Result<Target> 
 // Flat listing (direct children)
 // ---------------------------------------------------------------------------
 
-fn build_flat(tree: &DocumentTree, target: &Target, filter: ListFilter<'_>) -> Vec<LsItem> {
+fn build_flat(tree: &DocumentTree, target: &Target, filter: ListFilter) -> Vec<LsItem> {
     tree.list_children(&target.parent, filter)
         .into_iter()
         .map(|e| to_ls_item(tree, e, None))
         .collect()
 }
 
-fn filter_from_args(args: &LsArgs) -> ListFilter<'_> {
+fn filter_from_args(args: &LsArgs) -> ListFilter {
     let filter = ListFilter::new(args.kind);
     let filter = if args.include_trashed {
         filter.include_trashed()
     } else {
         filter
     };
-    match args.sort.as_ref() {
+    match args.sort {
         Some(sort) => filter.with_sort(sort),
         None => filter,
     }
@@ -158,7 +158,7 @@ fn virtual_tree_folder(name: &str, children: Vec<TreeNode>) -> TreeNode {
 fn build_recursive(
     tree: &DocumentTree,
     target: &Target,
-    filter: ListFilter<'_>,
+    filter: ListFilter,
     depth: Option<u32>,
 ) -> anyhow::Result<Vec<LsItem>> {
     Ok(tree
@@ -175,7 +175,7 @@ fn build_recursive(
 fn build_tree_node(
     tree: &DocumentTree,
     target: &Target,
-    filter: ListFilter<'_>,
+    filter: ListFilter,
     depth: Option<u32>,
 ) -> anyhow::Result<TreeNode> {
     let (uuid, last_opened, tags, pinned) = match &target.parent {
@@ -219,7 +219,7 @@ fn build_tree_node(
 fn build_tree_children(
     tree: &DocumentTree,
     parent: &Parent,
-    filter: ListFilter<'_>,
+    filter: ListFilter,
     max_depth: Option<u32>,
     current_depth: u32,
     ancestors: &mut HashSet<Uuid>,
@@ -283,12 +283,8 @@ fn build_tree_children(
 // Output
 // ---------------------------------------------------------------------------
 
-fn print_output(out: &LsOutput, format: OutputFormat) {
-    println!("{}", format_output(out, format));
-}
-
-/// Render `out` to a string in the requested format. Used by `print_output`
-/// and by snapshot tests.
+/// Render `out` to a string in the requested format; also used directly by
+/// snapshot tests.
 ///
 /// # Panics
 /// Panics if `out` cannot be serialized as JSON.

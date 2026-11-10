@@ -8,13 +8,13 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT OR Apache-2.0"
 authors = ["Nikolai Golub <nikolay.v.golub@gmail.com>"]
-repository = "https://github.com/nikolaygolub/remarkable-tablet-cli-rs"
-homepage = "https://github.com/nikolaygolub/remarkable-tablet-cli-rs"
+repository = "https://github.com/citizen-stig/remarkable-tablet-cli-rs"
+homepage = "https://github.com/citizen-stig/remarkable-tablet-cli-rs"
 readme = "README.md"
 keywords = ["remarkable", "cli", "tablet", "ssh", "sftp"]
 categories = ["command-line-utilities"]
@@ -26,20 +26,21 @@ clap = { version = "4", features = ["derive", "env"] }
 filetime = "0.2"
 futures = "0.3"
 glob = "0.3"
-russh = "=0.57.1"
-russh-sftp = "2.1"
+russh = "=0.65.1"
+russh-sftp = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs"] }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
+toml_edit = "0.22"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # In-tree crates referenced by sibling crates.
-remarkable-metadata = { path = "crates/remarkable-metadata", version = "0.1.0" }
-remarkable-tablet = { path = "crates/remarkable-tablet", version = "0.1.0" }
-remarkable-rm = { path = "crates/remarkable-rm", version = "0.1.0" }
+remarkable-metadata = { path = "crates/remarkable-metadata", version = "0.1.1" }
+remarkable-tablet = { path = "crates/remarkable-tablet", version = "0.1.1" }
+remarkable-rm = { path = "crates/remarkable-rm", version = "0.1.1" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -48,3 +49,7 @@ unsafe_code = "forbid"
 pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
+# Trait impls keep `async fn` to mirror the trait even when there is nothing to await.
+unused_async_trait_impl = "allow"
+# Suggested `assert_eq!(v, [] as [T; 0])` reads worse than `assert!(v.is_empty())`.
+assert_is_empty = "allow"

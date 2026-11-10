@@ -1,11 +1,7 @@
-use std::path::Path;
-use std::time::Duration;
-
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tokio::net::TcpStream;
-use tokio::time::timeout;
+use std::path::Path;
 use uuid::Uuid;
 
 use crate::cli::GlobalOptions;
@@ -155,6 +151,11 @@ impl CommandContext {
         self.global.no_restart
     }
 
+    #[must_use]
+    pub(crate) fn config_path(&self) -> Option<&Path> {
+        self.global.config.as_deref()
+    }
+
     pub fn log_verbose(&self, msg: &str) {
         output::log_verbose(&self.global, msg);
     }
@@ -162,10 +163,30 @@ impl CommandContext {
     /// # Errors
     /// Returns an error if host discovery, SSH authentication, or SFTP subsystem startup fails.
     pub async fn connect(&self) -> anyhow::Result<ConnectedSession> {
-        let host = discover_host(&self.global, &self.config).await?;
+        let targets = connection_targets(&self.config);
+        let mut failures = Vec::new();
+        for host in targets {
+            match self.connect_host(&host).await {
+                Ok(session) => return Ok(session),
+                Err(err) if self.config.host_is_explicit => {
+                    return Err(err);
+                }
+                Err(err) => {
+                    self.log_verbose(&format!("connection to {host} failed: {err:#}"));
+                    failures.push(format!("{host}: {err:#}"));
+                }
+            }
+        }
 
-        self.log_verbose(&format!("connecting to {host}:{}", self.config.port));
+        Err(anyhow::Error::new(CliError::ConnectionFailed(format!(
+            "could not connect to tablet; tried {}",
+            failures.join("; ")
+        ))))
+    }
 
+    /// # Errors
+    /// Returns an error if the SSH connection or authentication fails.
+    pub(crate) async fn connect_host(&self, host: &str) -> anyhow::Result<ConnectedSession> {
         let opts = ConnectOptions {
             user: self.config.user.clone(),
             password: self.config.password.clone(),
@@ -174,11 +195,14 @@ impl CommandContext {
             verbose: self.config.verbose && !self.config.quiet,
         };
 
-        let ssh = SshConnection::connect(&host, self.config.port, &opts)
+        self.log_verbose(&format!("connecting to {host}:{}", self.config.port));
+        let ssh = SshConnection::connect(host, self.config.port, &opts)
             .await
             .context("ssh connect")?;
-
-        Ok(ConnectedSession { ssh, host })
+        Ok(ConnectedSession {
+            ssh,
+            host: host.to_string(),
+        })
     }
 
     /// # Errors
@@ -190,12 +214,11 @@ impl CommandContext {
             .context("load metadata")?;
         self.log_verbose(
             &format!(
-                "xochitl: {} dir entries ({}ms list_dir), {} matched <uuid>.metadata, {} parsed in {}ms, {} parse failures, {} content failures",
-                diag.dir_entry_count,
-                diag.list_dir_elapsed.as_millis(),
+                "xochitl: fetched {} files in {}ms, {} matched <uuid>.metadata, {} parsed, {} parse failures, {} content failures",
+                diag.fetched_file_count,
+                diag.fetch_elapsed.as_millis(),
                 diag.uuid_metadata_count,
                 entries.len(),
-                diag.read_elapsed.as_millis(),
                 diag.parse_failures.len(),
                 diag.content_failures.len(),
             ),
@@ -218,9 +241,8 @@ impl CommandContext {
     }
 }
 
-const USB_HOST: &str = "10.11.99.1";
-const USB_PORT: u16 = 22;
-const USB_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const USB_HOST: &str = "10.11.99.1";
+pub(crate) const MDNS_HOST: &str = "remarkable.local";
 
 /// Downcast an `anyhow::Error` to `CliError`. Lower-layer error types
 /// (`MetadataError`, `TabletError`) are converted to their `CliError`
@@ -243,53 +265,79 @@ pub fn to_cli_error(err: anyhow::Error) -> CliError {
     }
 }
 
-async fn discover_host(global: &GlobalOptions, cfg: &ResolvedConfig) -> anyhow::Result<String> {
-    if let Some(h) = cfg.host.as_deref() {
-        return Ok(h.to_string());
+fn connection_targets(cfg: &ResolvedConfig) -> Vec<String> {
+    if cfg.host_is_explicit {
+        return cfg.host.iter().cloned().collect();
     }
-    output::log_verbose(
-        global,
-        &format!("auto-discover: probing USB fallback {USB_HOST}:{USB_PORT}"),
-    );
-    let probe = timeout(
-        USB_PROBE_TIMEOUT,
-        TcpStream::connect(format!("{USB_HOST}:{USB_PORT}")),
-    )
-    .await;
-    match probe {
-        Ok(Ok(_)) => Ok(USB_HOST.to_string()),
-        _ => Err(anyhow::Error::new(CliError::ConnectionFailed(
-            "Could not auto-discover tablet. Connect via USB (10.11.99.1) or pass --host. \
-             You can also set the host in ~/.config/remarkable-cli/config.toml."
-                .to_string(),
-        ))),
+
+    let mut targets = vec![USB_HOST.to_string()];
+    if let Some(host) = &cfg.host
+        && !targets.contains(host)
+    {
+        targets.push(host.clone());
     }
+    if !targets
+        .iter()
+        .any(|host| host.eq_ignore_ascii_case(MDNS_HOST))
+    {
+        targets.push(MDNS_HOST.to_string());
+    }
+    targets
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use crate::test_support::make_doc;
     use remarkable_metadata::metadata::{FileType, ItemKind, Parent};
     use remarkable_metadata::tree::DocumentTree;
 
-    fn make_doc(uuid: &str, name: &str, parent: Parent, file_type: FileType) -> DocumentEntry {
-        let deleted = parent == Parent::Trash;
-        DocumentEntry {
-            uuid: Uuid::parse_str(uuid).unwrap(),
-            visible_name: name.to_string(),
-            kind: ItemKind::Document {
-                file_type,
-                page_count: None,
-            },
-            parent,
-            deleted,
-            pinned: false,
-            last_modified: Utc.timestamp_millis_opt(1_710_000_000_000).unwrap(),
-            version: 1,
-            tags: vec![],
-            last_opened: None,
+    fn resolved_config(host: Option<&str>, host_is_explicit: bool) -> ResolvedConfig {
+        ResolvedConfig {
+            host: host.map(str::to_string),
+            host_is_explicit,
+            port: 22,
+            user: "root".to_string(),
+            password: None,
+            key_file: "~/.ssh/id_rsa".into(),
+            format: output::OutputFormat::Human,
+            data_dir: "/home/root/.local/share/remarkable/xochitl".to_string(),
+            timeout: std::time::Duration::from_secs(5),
+            verbose: false,
+            quiet: false,
         }
+    }
+
+    #[test]
+    fn auto_connection_targets_are_gradual() {
+        assert_eq!(
+            connection_targets(&resolved_config(None, false)),
+            [USB_HOST, MDNS_HOST]
+        );
+        assert_eq!(
+            connection_targets(&resolved_config(Some("192.168.1.42"), false)),
+            [USB_HOST, "192.168.1.42", MDNS_HOST]
+        );
+    }
+
+    #[test]
+    fn explicit_host_is_the_only_connection_target() {
+        assert_eq!(
+            connection_targets(&resolved_config(Some("192.168.1.42"), true)),
+            ["192.168.1.42"]
+        );
+    }
+
+    #[test]
+    fn duplicate_auto_connection_targets_are_removed() {
+        assert_eq!(
+            connection_targets(&resolved_config(Some(USB_HOST), false)),
+            [USB_HOST, MDNS_HOST]
+        );
+        assert_eq!(
+            connection_targets(&resolved_config(Some("reMarkable.local"), false)),
+            [USB_HOST, "reMarkable.local"]
+        );
     }
 
     #[test]

@@ -81,7 +81,7 @@ async fn run(ctx: &CommandContext, args: &RmArgs) -> anyhow::Result<()> {
     let result = run_with_conn(&session.ssh, ctx.data_dir(), &tree, args, ctx.no_restart()).await;
     session.ssh.disconnect().await;
     let out = result?;
-    print_output(&out, ctx.format());
+    println!("{}", format_output(&out, ctx.format()));
     Ok(())
 }
 
@@ -303,10 +303,6 @@ async fn wipe_uuid<C: TabletConnection>(
     }
 
     Ok(())
-}
-
-fn print_output(out: &RmOutput, format: OutputFormat) {
-    println!("{}", format_output(out, format));
 }
 
 #[must_use]

@@ -1,0 +1,32 @@
+[package]
+name = "remarkable-metadata-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+uuid = "1"
+remarkable-metadata = { path = ".." }
+
+# Standalone workspace so the nightly/sanitizer build stays out of the main one.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse_metadata"
+path = "fuzz_targets/parse_metadata.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_content"
+path = "fuzz_targets/parse_content.rs"
+test = false
+doc = false
+bench = false

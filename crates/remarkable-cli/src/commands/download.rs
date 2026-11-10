@@ -53,7 +53,7 @@ async fn run(ctx: &CommandContext, args: &DownloadArgs) -> anyhow::Result<()> {
     let result = run_with_conn(&session.ssh, ctx.data_dir(), &tree, args).await;
     session.ssh.disconnect().await;
     let out = result?;
-    print_output(&out, ctx.format());
+    println!("{}", format_output(&out, ctx.format()));
     Ok(())
 }
 
@@ -189,10 +189,6 @@ async fn download_notebook<C: TabletConnection>(
         size_bytes: total_bytes,
         pages_written: Some(pages_count),
     })
-}
-
-fn print_output(out: &DownloadOutput, format: OutputFormat) {
-    println!("{}", format_output(out, format));
 }
 
 #[must_use]

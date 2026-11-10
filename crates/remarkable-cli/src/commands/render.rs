@@ -6,6 +6,7 @@
 //! impl — `BackupConnection` is a local-fs adapter at the bottom of this
 //! file.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -15,12 +16,14 @@ use uuid::Uuid;
 use crate::cli::RenderArgs;
 use crate::commands::common::{self, CommandContext};
 use crate::commands::notebook_pages;
+use crate::commands::templates::TemplateProvider;
+use crate::config;
 use crate::error::CliError;
 use crate::output::{self, OutputFormat};
-use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind};
+use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind, RawContent};
 use remarkable_metadata::path_resolver::{self, Resolved};
 use remarkable_metadata::tree::DocumentTree;
-use remarkable_rm::{RenderOptions, parse_page, render_page};
+use remarkable_rm::{RenderOptions, parse_page, render_page_with_background};
 use remarkable_tablet::connection::{
     RemoteEntry, RemoteFileKind, RemoteMetadata, TabletConnection,
 };
@@ -61,7 +64,7 @@ async fn run(ctx: &CommandContext, args: &RenderArgs) -> anyhow::Result<()> {
         session.ssh.disconnect().await;
         result?
     };
-    print_output(&out, ctx.format());
+    println!("{}", format_output(&out, ctx.format()));
     Ok(())
 }
 
@@ -128,14 +131,30 @@ pub async fn run_with_conn<C: TabletConnection>(
     common::refuse_existing(&output_dir)?;
 
     let selected =
-        notebook_pages::list_selected_pages(conn, data_dir, entry, args.pages.as_ref()).await?;
+        notebook_pages::load_selected_pages(conn, data_dir, entry, args.pages.as_ref()).await?;
 
     tokio::fs::create_dir_all(&output_dir)
         .await
         .with_context(|| format!("create {}", output_dir.display()))?;
 
-    let mut rendered = Vec::with_capacity(selected.len());
-    for (page_index, page_filename) in selected {
+    // Per-page paper templates (firmware 3.x `.content`), keyed by page UUID.
+    // Empty when backgrounds are disabled or `.content` records none.
+    let template_by_id = if args.no_background {
+        HashMap::new()
+    } else {
+        load_page_templates(conn, data_dir, entry.uuid, selected.content.as_ref()).await
+    };
+    // `--from-backup` reads local paths, so it can't fetch templates from the
+    // device — only `--templates-dir`/cache apply there.
+    let mut templates = TemplateProvider::new(
+        conn,
+        args.from_backup.is_none(),
+        args.templates_dir.as_deref(),
+        config::default_template_cache_dir(),
+    );
+
+    let mut rendered = Vec::with_capacity(selected.files.len());
+    for (page_index, page_filename) in selected.files {
         let remote = format!("{data_dir}/{}/{}", entry.uuid, page_filename);
         let bytes = conn
             .read_file(&remote)
@@ -143,7 +162,13 @@ pub async fn run_with_conn<C: TabletConnection>(
             .with_context(|| format!("read {remote}"))?;
         let page = parse_page(&bytes).with_context(|| format!("parse {remote}"))?;
         let opts = render_options_for(&page, args.width);
-        let png = render_page(&page, opts).with_context(|| format!("render {remote}"))?;
+        let page_id = page_filename.strip_suffix(".rm").unwrap_or(&page_filename);
+        let template = template_by_id.get(page_id).and_then(Option::as_deref);
+        let background = templates
+            .background(template, opts.width, opts.height)
+            .await;
+        let png = render_page_with_background(&page, opts, background)
+            .with_context(|| format!("render {remote}"))?;
         let output_path = output_dir.join(format!("{}_page_{page_index}.png", entry.uuid));
         tokio::fs::write(&output_path, &png)
             .await
@@ -177,6 +202,35 @@ fn render_options_for(page: &remarkable_rm::Page, width: u32) -> RenderOptions {
     let height = u32::try_from(u64::from(width) * u64::from(src_h) / u64::from(src_w.max(1)))
         .unwrap_or(src_h);
     RenderOptions { width, height }
+}
+
+async fn load_page_templates<C: TabletConnection>(
+    conn: &C,
+    data_dir: &str,
+    uuid: Uuid,
+    content: Option<&RawContent>,
+) -> HashMap<String, Option<String>> {
+    let mut pages = content.map(RawContent::page_templates).unwrap_or_default();
+    if pages.iter().any(|(_, template)| template.is_none()) {
+        let path = format!("{data_dir}/{uuid}.pagedata");
+        if let Ok(bytes) = conn.read_file(&path).await
+            && let Ok(pagedata) = std::str::from_utf8(&bytes)
+        {
+            apply_pagedata_templates(&mut pages, pagedata);
+        }
+    }
+    pages.into_iter().collect()
+}
+
+fn apply_pagedata_templates(pages: &mut [(String, Option<String>)], pagedata: &str) {
+    for ((_, template), line) in pages.iter_mut().zip(pagedata.lines()) {
+        if template.is_none() {
+            let name = line.trim();
+            if !name.is_empty() {
+                *template = Some(name.to_string());
+            }
+        }
+    }
 }
 
 fn expect_notebook(entry: &DocumentEntry) -> anyhow::Result<()> {
@@ -222,10 +276,6 @@ fn locate_xochitl_root(root: &Path) -> anyhow::Result<PathBuf> {
         "expected a backup directory at {} (with optional `xochitl/` subdir)",
         root.display()
     )
-}
-
-fn print_output(out: &RenderOutput, format: OutputFormat) {
-    println!("{}", format_output(out, format));
 }
 
 #[must_use]
@@ -358,5 +408,32 @@ fn into_remote_metadata(meta: &std::fs::Metadata) -> RemoteMetadata {
         size: Some(meta.len()),
         mtime: meta.modified().ok(),
         kind,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_pagedata_templates;
+
+    #[test]
+    fn pagedata_fills_only_missing_templates_by_page_position() {
+        let mut pages = vec![
+            ("p1".to_string(), None),
+            ("p2".to_string(), Some("Explicit".to_string())),
+            ("p3".to_string(), None),
+            ("p4".to_string(), None),
+        ];
+
+        apply_pagedata_templates(&mut pages, " Pagedata One \nIgnored\n\nPagedata Four\n");
+
+        assert_eq!(
+            pages,
+            vec![
+                ("p1".to_string(), Some("Pagedata One".to_string())),
+                ("p2".to_string(), Some("Explicit".to_string())),
+                ("p3".to_string(), None),
+                ("p4".to_string(), Some("Pagedata Four".to_string())),
+            ]
+        );
     }
 }

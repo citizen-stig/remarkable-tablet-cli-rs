@@ -7,13 +7,18 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Parser and renderer for reMarkable .rm notebook page files (Phase 4 — work in progress)."
 
 [dependencies]
+resvg = { version = "0.47" }
 thiserror.workspace = true
-tiny-skia = "0.11"
+tiny-skia = "0.12"
 
 [lints]
 workspace = true
+
+[features]
+templates = []

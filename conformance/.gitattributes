@@ -1,0 +1,2 @@
+# Preserve exact reMarkable wire bytes, including header-only fixture stubs.
+*.rm binary

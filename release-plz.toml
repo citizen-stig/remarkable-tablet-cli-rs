@@ -1,0 +1,9 @@
+# shortcut: the published 0.1.0 of these two (russh 0.57.1) no longer compiles from a fresh
+# resolve, so cargo-semver-checks can't build it as a baseline. Remove after 0.1.1 is published.
+[[package]]
+name = "remarkable-tablet"
+semver_check = false
+
+[[package]]
+name = "remarkable-cli"
+semver_check = false

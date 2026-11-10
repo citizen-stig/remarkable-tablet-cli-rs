@@ -6,10 +6,10 @@ use remarkable_metadata::SortField;
 use remarkable_metadata::metadata::{DocumentEntry, FileType, ItemKind, ItemType, Parent};
 use remarkable_metadata::tree::{DocumentTree, EntryKindFilter};
 use remarkable_tablet::connection::FakeConnection;
-use remarkable_tablet::tablet::load_all_metadata;
 use uuid::Uuid;
 
-const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
+mod common;
+use common::{DATA_DIR, build_tree};
 
 const FOLDER_WORK: &str = "aaaaaaaa-1111-1111-1111-111111111111";
 const FOLDER_PROJECTS: &str = "aaaaaaaa-2222-2222-2222-222222222222";
@@ -69,11 +69,6 @@ fn setup_fake_tablet() -> FakeConnection {
     );
 
     conn
-}
-
-async fn build_tree(conn: &FakeConnection) -> DocumentTree {
-    let entries = load_all_metadata(conn, DATA_DIR).await.unwrap();
-    DocumentTree::build(entries)
 }
 
 fn ls_args() -> LsArgs {
@@ -428,9 +423,8 @@ async fn load_diagnostics_records_timing() {
     let conn = setup_fake_tablet();
     let (_entries, diag) = load_all_metadata_full(&conn, DATA_DIR).await.unwrap();
     // FakeConnection serves files from a tempdir, so timing is non-zero but small.
-    assert!(diag.list_dir_elapsed.as_nanos() > 0);
-    assert!(diag.read_elapsed.as_nanos() > 0);
-    assert!(diag.dir_entry_count > 0);
+    assert!(diag.fetch_elapsed.as_nanos() > 0);
+    assert!(diag.fetched_file_count > 0);
     assert!(diag.uuid_metadata_count > 0);
 }
 

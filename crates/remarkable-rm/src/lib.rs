@@ -17,10 +17,19 @@ pub mod primitives;
 pub mod render;
 pub mod scene;
 pub mod tag;
+#[cfg(feature = "templates")]
+pub mod templates;
 
 pub use blocks::{BlockHeader, BlockType};
 pub use crdt::{CrdtId, LwwValue};
 pub use document::{Layer, Page, parse_page};
 pub use error::ParseError;
-pub use render::{DEFAULT_HEIGHT, DEFAULT_WIDTH, RenderError, RenderOptions, render_page};
+pub use render::{
+    BackgroundImage, DEFAULT_HEIGHT, DEFAULT_WIDTH, RenderError, RenderOptions, render_page,
+    render_page_with_background,
+};
 pub use scene::line::{Line, Pen, PenColor, Point};
+#[cfg(feature = "templates")]
+pub use templates::{TemplateError, decode_template};
+
+mod render_text;

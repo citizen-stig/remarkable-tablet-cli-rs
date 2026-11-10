@@ -19,7 +19,19 @@ pub struct DocumentTree {
 pub enum ChildLookup<'a> {
     Missing,
     Entry(&'a DocumentEntry),
-    Ambiguous,
+    Ambiguous(Vec<&'a DocumentEntry>),
+}
+
+impl<'a> ChildLookup<'a> {
+    pub(crate) fn from_matches(mut matches: impl Iterator<Item = &'a DocumentEntry>) -> Self {
+        match (matches.next(), matches.next()) {
+            (None, _) => Self::Missing,
+            (Some(entry), None) => Self::Entry(entry),
+            (Some(first), Some(second)) => {
+                Self::Ambiguous([first, second].into_iter().chain(matches).collect())
+            }
+        }
+    }
 }
 
 /// Filter on entry kind for `list_children` / `list_recursive`.
@@ -35,25 +47,25 @@ pub enum EntryKindFilter {
 
 /// Listing-side filter knobs shared by `list_children` and `list_recursive`.
 #[derive(Debug, Clone, Copy)]
-pub struct ListFilter<'a> {
+pub struct ListFilter {
     include_trashed: bool,
     kind: EntryKindFilter,
-    sort: Option<&'a SortField>,
+    sort: SortField,
 }
 
-impl Default for ListFilter<'_> {
+impl Default for ListFilter {
     fn default() -> Self {
         Self::new(EntryKindFilter::All)
     }
 }
 
-impl<'a> ListFilter<'a> {
+impl ListFilter {
     #[must_use]
     pub const fn new(kind: EntryKindFilter) -> Self {
         Self {
             include_trashed: false,
             kind,
-            sort: None,
+            sort: SortField::Name,
         }
     }
 
@@ -79,8 +91,8 @@ impl<'a> ListFilter<'a> {
     }
 
     #[must_use]
-    pub const fn with_sort(mut self, sort: &'a SortField) -> Self {
-        self.sort = Some(sort);
+    pub const fn with_sort(mut self, sort: SortField) -> Self {
+        self.sort = sort;
         self
     }
 
@@ -90,7 +102,7 @@ impl<'a> ListFilter<'a> {
     }
 
     #[must_use]
-    pub const fn sort_field(self) -> Option<&'a SortField> {
+    pub const fn sort_field(self) -> SortField {
         self.sort
     }
 
@@ -105,18 +117,20 @@ impl<'a> ListFilter<'a> {
 }
 
 impl DocumentTree {
-    /// Build a tree from a flat list of document entries.
+    /// Build a tree from a flat list of document entries. The last entry wins
+    /// when a UUID occurs more than once.
     #[must_use]
     pub fn build(entries: Vec<DocumentEntry>) -> Self {
-        let mut by_uuid = HashMap::with_capacity(entries.len());
+        let by_uuid: HashMap<_, _> = entries
+            .into_iter()
+            .map(|entry| (entry.uuid, entry))
+            .collect();
         let mut children: HashMap<Parent, Vec<Uuid>> = HashMap::new();
-
-        for entry in entries {
+        for entry in by_uuid.values() {
             children
                 .entry(entry.parent.clone())
                 .or_default()
                 .push(entry.uuid);
-            by_uuid.insert(entry.uuid, entry);
         }
 
         let paths = build_display_paths(&by_uuid);
@@ -150,7 +164,7 @@ impl DocumentTree {
 
     #[must_use]
     pub fn lookup_child(&self, parent: &Parent, name: &str) -> ChildLookup<'_> {
-        let mut matches = self
+        let matches = self
             .children
             .get(parent)
             .into_iter()
@@ -158,11 +172,7 @@ impl DocumentTree {
             .filter_map(|uuid| self.entries.get(uuid))
             .filter(|entry| entry.visible_name == name);
 
-        match (matches.next(), matches.next()) {
-            (None, _) => ChildLookup::Missing,
-            (Some(entry), None) => ChildLookup::Entry(entry),
-            (Some(_), Some(_)) => ChildLookup::Ambiguous,
-        }
+        ChildLookup::from_matches(matches)
     }
 
     /// Number of direct children.
@@ -178,7 +188,7 @@ impl DocumentTree {
 
     /// List children of a folder with filters and sorting applied.
     #[must_use]
-    pub fn list_children(&self, parent: &Parent, filter: ListFilter<'_>) -> Vec<&DocumentEntry> {
+    pub fn list_children(&self, parent: &Parent, filter: ListFilter) -> Vec<&DocumentEntry> {
         let mut result = if matches!(parent, Parent::Root) && filter.includes_trashed() {
             self.merged_root_and_trash_children(filter.sort_field())
         } else {
@@ -192,7 +202,7 @@ impl DocumentTree {
     pub fn sorted_direct_children(
         &self,
         parent: &Parent,
-        filter: ListFilter<'_>,
+        filter: ListFilter,
     ) -> Vec<&DocumentEntry> {
         let mut children = self.child_entries(parent);
         if !filter.includes_trashed() {
@@ -213,7 +223,7 @@ impl DocumentTree {
         &self,
         parent: &Parent,
         depth: Option<u32>,
-        filter: ListFilter<'_>,
+        filter: ListFilter,
     ) -> Result<Vec<(u32, &DocumentEntry)>, MetadataError> {
         let mut result = Vec::new();
         let mut ancestors = HashSet::new();
@@ -234,7 +244,7 @@ impl DocumentTree {
         entries: Vec<&'a DocumentEntry>,
         current_depth: u32,
         max_depth: Option<u32>,
-        filter: ListFilter<'_>,
+        filter: ListFilter,
         ancestors: &mut HashSet<Uuid>,
         result: &mut Vec<(u32, &'a DocumentEntry)>,
     ) -> Result<(), MetadataError> {
@@ -267,7 +277,7 @@ impl DocumentTree {
         Ok(())
     }
 
-    fn merged_root_and_trash_children(&self, sort: Option<&SortField>) -> Vec<&DocumentEntry> {
+    fn merged_root_and_trash_children(&self, sort: SortField) -> Vec<&DocumentEntry> {
         let mut children = self.child_entries(&Parent::Root);
         children.extend(self.child_entries(&Parent::Trash));
         sort_entries(&mut children, sort);
@@ -328,9 +338,9 @@ fn build_display_path(
     path
 }
 
-pub fn sort_entries(entries: &mut [&DocumentEntry], sort: Option<&SortField>) {
+pub fn sort_entries(entries: &mut [&DocumentEntry], sort: SortField) {
     match sort {
-        Some(SortField::Name) | None => {
+        SortField::Name => {
             entries.sort_by(|a, b| {
                 a.is_document().cmp(&b.is_document()).then_with(|| {
                     a.visible_name
@@ -339,10 +349,10 @@ pub fn sort_entries(entries: &mut [&DocumentEntry], sort: Option<&SortField>) {
                 })
             });
         }
-        Some(SortField::Modified) => {
-            entries.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+        SortField::Modified => {
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_modified));
         }
-        Some(SortField::Type) => {
+        SortField::Type => {
             entries.sort_by(|a, b| {
                 a.type_sort_key().cmp(&b.type_sort_key()).then_with(|| {
                     a.visible_name
@@ -518,6 +528,46 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_uuid_is_indexed_once() {
+        let entry = make_entry(FOLDER_A, "Work", ItemType::Collection, Parent::Root, None);
+        let tree = DocumentTree::build(vec![entry.clone(), entry]);
+        assert_eq!(tree.all_entries().count(), 1);
+        assert_eq!(tree.children_count(&Parent::Root), 1);
+        assert!(matches!(
+            tree.lookup_child(&Parent::Root, "Work"),
+            ChildLookup::Entry(_)
+        ));
+        assert_eq!(
+            tree.list_recursive(&Parent::Root, None, ListFilter::all())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn duplicate_uuid_uses_last_parent_and_name() {
+        let old = make_entry(FOLDER_A, "Work", ItemType::Collection, Parent::Root, None);
+        let new = make_entry(
+            FOLDER_A,
+            "Archived",
+            ItemType::Collection,
+            Parent::Trash,
+            None,
+        );
+        let uuid = new.uuid;
+        let tree = DocumentTree::build(vec![old, new]);
+        assert_eq!(tree.children_count(&Parent::Root), 0);
+        assert!(tree.child_entries(&Parent::Root).is_empty());
+        assert_eq!(tree.children_count(&Parent::Trash), 1);
+        assert_eq!(
+            tree.child_entries(&Parent::Trash)[0].visible_name,
+            "Archived"
+        );
+        assert_eq!(tree.display_path(&uuid), Some("/trash/Archived"));
+    }
+
+    #[test]
     fn root_children() {
         let tree = DocumentTree::build(sample_entries());
         let root = tree.child_entries(&Parent::Root);
@@ -592,7 +642,7 @@ mod tests {
         let folder_uuid = Uuid::parse_str(FOLDER_A).unwrap();
         let items = tree.list_children(
             &Parent::Folder(folder_uuid),
-            ListFilter::all().with_sort(&SortField::Modified),
+            ListFilter::all().with_sort(SortField::Modified),
         );
         let names: Vec<_> = items.iter().map(|e| e.visible_name.as_str()).collect();
         // Meeting Notes (1710604800000) > Report.pdf (1710500000000)
@@ -602,8 +652,7 @@ mod tests {
     #[test]
     fn list_children_sort_by_type() {
         let tree = DocumentTree::build(sample_entries());
-        let items =
-            tree.list_children(&Parent::Root, ListFilter::all().with_sort(&SortField::Type));
+        let items = tree.list_children(&Parent::Root, ListFilter::all().with_sort(SortField::Type));
         let names: Vec<_> = items.iter().map(|e| e.visible_name.as_str()).collect();
         // folders (Personal, Work) → notebook (Quick Note) → epub (Rust Book)
         assert_eq!(names, vec!["Personal", "Work", "Quick Note", "Rust Book"]);

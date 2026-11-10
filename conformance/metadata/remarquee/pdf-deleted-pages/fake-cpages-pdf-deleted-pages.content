@@ -1,0 +1,22 @@
+{
+  "fileType": "pdf",
+  "cPages": {
+    "pages": [
+      {
+        "id": "keep0",
+        "redir": {}
+      },
+      {
+        "id": "del1",
+        "redir": {},
+        "deleted": {
+          "value": 1
+        }
+      },
+      {
+        "id": "keep2",
+        "redir": {}
+      }
+    ]
+  }
+}

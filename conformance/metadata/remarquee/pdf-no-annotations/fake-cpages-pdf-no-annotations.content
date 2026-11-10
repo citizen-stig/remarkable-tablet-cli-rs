@@ -1,0 +1,24 @@
+{
+  "fileType": "pdf",
+  "cPages": {
+    "pages": [
+      {
+        "id": "p0",
+        "redir": {}
+      },
+      {
+        "id": "p1",
+        "redir": {}
+      },
+      {
+        "id": "p2"
+      },
+      {
+        "id": "p3",
+        "redir": {
+          "value": 1
+        }
+      }
+    ]
+  }
+}

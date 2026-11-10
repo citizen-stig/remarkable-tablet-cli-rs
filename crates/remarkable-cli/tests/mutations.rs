@@ -10,11 +10,10 @@ use remarkable_cli::cli::{MkdirArgs, MvArgs, RenameArgs, RmArgs};
 use remarkable_cli::commands::{mkdir, mv, rename, rm};
 use remarkable_cli::error::CliError;
 use remarkable_metadata::metadata::{ItemType, Parent, RawMetadata};
-use remarkable_metadata::tree::DocumentTree;
 use remarkable_tablet::connection::{FakeConnection, TabletConnection};
-use remarkable_tablet::tablet::load_all_metadata;
 
-const DATA_DIR: &str = "/home/root/.local/share/remarkable/xochitl";
+mod common;
+use common::{DATA_DIR, build_tree, downcast_cli, register_xochitl};
 
 const FOLDER_WORK_UUID: &str = "aaaaaaaa-1111-1111-1111-111111111111";
 const FOLDER_SUB_UUID: &str = "aaaaaaaa-2222-2222-2222-222222222222";
@@ -74,20 +73,6 @@ fn populate(conn: &FakeConnection) {
         &format!("{DATA_DIR}/{DOC_DUP_UUID}.content"),
         br#"{"fileType":"pdf"}"#,
     );
-}
-
-async fn build_tree(conn: &FakeConnection) -> DocumentTree {
-    let entries = load_all_metadata(conn, DATA_DIR).await.unwrap();
-    DocumentTree::build(entries)
-}
-
-fn register_xochitl(conn: &FakeConnection) {
-    conn.set_command_output("systemctl stop xochitl", "");
-    conn.set_command_output("systemctl start xochitl", "");
-}
-
-fn downcast_cli(err: anyhow::Error) -> CliError {
-    err.downcast::<CliError>().expect("expected CliError")
 }
 
 async fn read_metadata(conn: &FakeConnection, uuid: &str) -> RawMetadata {

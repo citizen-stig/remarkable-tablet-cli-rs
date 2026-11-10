@@ -1,6 +1,5 @@
 ---
 source: crates/remarkable-cli/tests/cli.rs
-assertion_line: 34
 expression: stdout
 ---
 Command-line tool for browsing, backing up, and managing files on a reMarkable tablet.
@@ -8,22 +7,24 @@ Command-line tool for browsing, backing up, and managing files on a reMarkable t
 Usage: remarkable-cli [OPTIONS] <COMMAND>
 
 Commands:
-  connect   Test connectivity and print device info
-  ls        List folder contents
-  info      Show full metadata for a document or folder
-  find      Search documents by name pattern
-  backup    Backup tablet data to local directory
-  download  Download a document from the tablet
-  upload    Upload PDF or ePub files to tablet
-  mv        Move document/folder to a different parent
-  mkdir     Create folder(s) on the tablet
-  rename    Rename a document or folder
-  rm        Delete documents/folders (soft delete by default)
-  render    Render notebook pages to PNG
-  read      Fetch a document in consumable form: renders notebooks to PNG, downloads PDFs/ePubs — picking the right action by file type
-  help      Print this message or the help of the given subcommand(s)
+  connect     Test connectivity and print device info
+  setup-wifi  Enable automatic Wi-Fi discovery and SSH access
+  ls          List folder contents
+  info        Show full metadata for a document or folder
+  find        Search documents by name pattern
+  backup      Backup tablet data to local directory
+  download    Download a document from the tablet
+  upload      Upload PDF or ePub files to tablet
+  mv          Move document/folder to a different parent
+  mkdir       Create folder(s) on the tablet
+  rename      Rename a document or folder
+  rm          Delete documents/folders (soft delete by default)
+  render      Render notebook pages to PNG
+  read        Fetch a document in consumable form: renders notebooks to PNG, downloads PDFs/ePubs — picking the right action by file type
+  help        Print this message or the help of the given subcommand(s)
 
 Options:
+      --config <CONFIG>      Config file path
       --host <host>          Tablet IP/hostname [auto-discover if omitted]
       --port <port>          SSH port [default: 22]
       --user <user>          SSH username [default: root]

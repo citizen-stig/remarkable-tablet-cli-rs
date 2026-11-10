@@ -2,7 +2,7 @@
 //! tablet, layered on top of the data-only `remarkable-metadata` crate.
 //!
 //! The [`connection::TabletConnection`] trait abstracts the remote filesystem
-//! so commands can be exercised against [`connection::FakeConnection`]
+//! so commands can be exercised against `connection::FakeConnection`
 //! (gated behind the `test-utils` feature) in offline tests, while production
 //! code uses [`connection::SshConnection`].
 
