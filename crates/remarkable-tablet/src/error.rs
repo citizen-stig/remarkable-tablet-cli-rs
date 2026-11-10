@@ -9,7 +9,7 @@ pub enum IoSource {
     #[error(transparent)]
     Sftp(#[from] russh_sftp::client::error::Error),
 
-    /// `std::io::Error` from the test [`crate::connection::FakeConnection`],
+    /// `std::io::Error` from the test `FakeConnection`,
     /// the CLI's read-only backup-tree shim, or `transfer.rs`'s local-fs
     /// operations. Also covers SFTP `AsyncWrite` errors (`write_all` /
     /// `shutdown`) which surface through tokio as `io::Error` even though
@@ -117,7 +117,7 @@ pub enum TabletError {
     #[error("backup connection is read-only ({op})")]
     BackupReadOnly { op: &'static str },
 
-    /// Test-only: [`crate::connection::FakeConnection::execute`] received a
+    /// Test-only: `FakeConnection`'s [`execute`](crate::connection::TabletConnection::execute) received a
     /// command no test fixture had registered output for. Always present in
     /// the variant set so consumer code can match exhaustively, but only
     /// constructed under `#[cfg(feature = "test-utils")]`.
