@@ -32,7 +32,7 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs"] }
 toml = { version = "1.1", default-features = false, features = ["parse", "serde"] }
-toml_edit = "0.22"
+toml_edit = "0.25"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # In-tree crates referenced by sibling crates.
